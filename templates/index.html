@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f5ef">
+  <title>台股資料工作台</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f4f5ef;
+      --surface: #fff;
+      --ink: #18302b;
+      --muted: #64746d;
+      --line: #dce2d9;
+      --green: #176b55;
+      --green-dark: #10513f;
+      --coral: #c94f38;
+      --soft-green: #e6f0e8;
+      --soft-coral: #fff0e9;
+      font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; }
+    .topbar {
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 5vw;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, .72);
+      font-size: 13px;
+      letter-spacing: 0;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; }
+    .brand-mark { width: 11px; height: 11px; background: var(--coral); border-radius: 2px; transform: rotate(45deg); }
+    .top-note { color: var(--muted); }
+    main { width: min(1120px, calc(100% - 40px)); margin: 42px auto 80px; }
+    .heading { display: flex; justify-content: space-between; align-items: end; gap: 24px; margin-bottom: 25px; }
+    .eyebrow { margin: 0 0 8px; color: var(--green); font-size: 12px; font-weight: 700; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin-bottom: 7px; font: 600 32px/1.25 "Noto Serif TC", "PMingLiU", serif; letter-spacing: 0; }
+    .subtitle { margin: 0; color: var(--muted); font-size: 14px; }
+    .source-note { color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .workspace { display: grid; grid-template-columns: 310px minmax(0, 1fr); gap: 24px; align-items: start; }
+    .control-panel, .results-panel { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+    .control-panel { padding: 21px; position: sticky; top: 18px; }
+    .section-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 13px; }
+    h2 { margin-bottom: 0; font-size: 15px; }
+    .count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+    label { display: block; margin-bottom: 8px; font-size: 13px; font-weight: 600; }
+    textarea {
+      display: block; width: 100%; min-height: 250px; resize: vertical;
+      padding: 12px; border: 1px solid var(--line); border-radius: 4px;
+      background: #fbfcf8; color: var(--ink); font: 13px/1.9 ui-monospace, Consolas, monospace;
+      outline: none;
+    }
+    textarea:focus { border-color: var(--green); box-shadow: 0 0 0 3px var(--soft-green); }
+    .hint { margin: 9px 0 17px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+    button { font: inherit; cursor: pointer; }
+    .run-button {
+      width: 100%; min-height: 43px; display: flex; justify-content: center; align-items: center; gap: 9px;
+      border: 0; border-radius: 4px; background: var(--green); color: white; font-size: 14px; font-weight: 700;
+    }
+    .run-button:hover:not(:disabled) { background: var(--green-dark); }
+    .run-button:disabled { cursor: wait; opacity: .72; }
+    .run-icon { font-size: 16px; }
+    .form-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .save-button {
+      min-height: 43px; border: 1px solid var(--line); border-radius: 4px;
+      color: var(--ink); background: white; font-size: 13px; font-weight: 700;
+    }
+    .save-button:hover:not(:disabled) { border-color: var(--green); color: var(--green-dark); }
+    .save-button:disabled { cursor: wait; opacity: .65; }
+    .results-panel { min-height: 470px; }
+    .results-head { padding: 17px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+    .tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+    .tab {
+      padding: 8px 11px; border: 1px solid transparent; border-radius: 4px;
+      color: var(--muted); background: transparent; font-size: 13px;
+    }
+    .tab[aria-selected="true"] { color: var(--green-dark); background: var(--soft-green); font-weight: 700; }
+    .downloads { display: flex; gap: 7px; }
+    .ai-controls { display: flex; align-items: center; gap: 7px; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+    .ai-provider {
+      min-height: 33px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 4px;
+      color: var(--ink); background: white; font: inherit; font-size: 12px;
+    }
+    .download {
+      padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px;
+      color: var(--ink); background: white; font-size: 12px;
+    }
+    .download:hover:not(:disabled) { border-color: var(--green); color: var(--green-dark); }
+    .download:disabled { cursor: not-allowed; opacity: .4; }
+    .ai-button {
+      min-height: 33px; padding: 6px 10px; border: 0; border-radius: 4px;
+      color: white; background: var(--green); font-size: 12px; font-weight: 700;
+    }
+    .ai-button:hover:not(:disabled) { background: var(--green-dark); }
+    .ai-button:disabled { cursor: not-allowed; opacity: .45; }
+    .status { display: flex; gap: 10px; align-items: center; margin: 17px 20px 0; padding: 11px 13px; border-radius: 4px; background: #f2f5f0; color: var(--muted); font-size: 13px; }
+    .status[hidden] { display: none; }
+    .status.error { color: #9c3827; background: var(--soft-coral); }
+    .status-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: #94a29a; }
+    .status.running .status-dot { background: var(--coral); animation: pulse 1.1s ease-in-out infinite alternate; }
+    @keyframes pulse { to { opacity: .35; transform: scale(.72); } }
+    .result-content { padding: 20px; }
+    .empty { min-height: 300px; display: grid; place-items: center; text-align: center; color: var(--muted); font-size: 13px; }
+    .empty-mark { display: block; margin: 0 auto 12px; color: #b5c4b9; font: 38px/1 Georgia, serif; }
+    .summary { margin-bottom: 15px; color: var(--muted); font-size: 12px; }
+    .stock-result { margin-bottom: 10px; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+    .stock-result summary { padding: 11px 13px; cursor: pointer; background: #fbfcf8; font-size: 13px; font-weight: 700; }
+    .stock-result summary::marker { color: var(--green); }
+    .stock-body { overflow-x: auto; padding: 0 12px 12px; }
+    .analysis-output { white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.85 "Noto Sans TC", "Microsoft JhengHei", sans-serif; }
+    .analysis-note { margin: 20px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.7; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
+    th, td { padding: 8px 9px; border-bottom: 1px solid #e9ede7; text-align: left; }
+    th { color: var(--muted); background: #f8faf6; font-weight: 600; }
+    tr:last-child td { border-bottom: 0; }
+    [hidden] { display: none !important; }
+    @media (max-width: 760px) {
+      .topbar { padding: 0 20px; }
+      .top-note { display: none; }
+      main { width: min(100% - 28px, 600px); margin: 27px auto 50px; }
+      .heading { align-items: start; flex-direction: column; gap: 9px; }
+      h1 { font-size: 27px; }
+      .source-note { white-space: normal; }
+      .workspace { grid-template-columns: 1fr; gap: 14px; }
+      .control-panel { position: static; padding: 17px; }
+      textarea { min-height: 150px; }
+      .results-head { align-items: start; flex-direction: column; padding: 14px; }
+      .downloads { width: 100%; }
+      .download { flex: 1; }
+      .result-content { padding: 14px; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>MARKET / TW</span></div>
+    <span class="top-note">台灣股票資料 · 法人持股、融資融券與近 30 日行情</span>
+  </header>
+  <main>
+    <div class="heading">
+      <div>
+        <p class="eyebrow">資料擷取工作台　/　01</p>
+        <h1>台股資料查詢</h1>
+        <p class="subtitle">一次整理法人持股、融資融券明細與近期每日股價</p>
+      </div>
+      <span class="source-note">資料來源：富邦 eBroker、Yahoo Finance</span>
+    </div>
+    <div class="workspace">
+      <form id="query-form" class="control-panel">
+        <div class="section-title">
+          <h2>股票清單</h2>
+          <span id="stock-count" class="count"></span>
+        </div>
+        <label for="stocks">輸入股票代號</label>
+        <textarea id="stocks" name="stocks" spellcheck="false" aria-describedby="list-hint">{{ stock_list }}</textarea>
+        <p id="list-hint" class="hint">每行一檔，也可用逗號分隔。最多 100 檔；儲存後會更新此服務的預設清單。</p>
+        <div class="form-actions">
+          <button id="save-button" class="save-button" type="button">儲存清單</button>
+          <button id="run-button" class="run-button" type="submit"><span class="run-icon" aria-hidden="true">↗</span><span>執行查詢</span></button>
+        </div>
+      </form>
+      <section class="results-panel" aria-label="查詢結果">
+        <div class="results-head">
+          <div class="tabs" role="tablist" aria-label="資料類型">
+            <button class="tab" type="button" role="tab" aria-selected="true" data-view="institution">法人持股</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-view="prices">近 30 日股價</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-view="margin-short">融資融券</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-view="analysis">AI 分析</button>
+          </div>
+          <div class="downloads">
+            <button class="download" id="download-institution" type="button" disabled>↓ 法人 JSON</button>
+            <button class="download" id="download-prices" type="button" disabled>↓ 股價 JSON</button>
+            <button class="download" id="download-margin-short" type="button" disabled>↓ 融資融券 JSON</button>
+          </div>
+          <div class="ai-controls">
+            <label class="sr-only" for="ai-provider">AI 服務</label>
+            <select id="ai-provider" class="ai-provider" aria-label="選擇 AI 服務">
+              <option value="openai">ChatGPT</option>
+              <option value="gemini">Gemini</option>
+            </select>
+            <button id="analyze-button" class="ai-button" type="button" disabled>開始分析</button>
+          </div>
+        </div>
+        <div id="status" class="status" role="status" aria-live="polite" hidden><span class="status-dot" aria-hidden="true"></span><span id="status-text"></span></div>
+        <div id="institution-view" class="result-content" role="tabpanel"><div class="empty"><div><span class="empty-mark" aria-hidden="true">↘</span>編輯左側清單後執行查詢，結果會顯示在這裡。</div></div></div>
+        <div id="prices-view" class="result-content" role="tabpanel" hidden><div class="empty"><div><span class="empty-mark" aria-hidden="true">↘</span>近 30 日股價將整理成每日行情表。</div></div></div>
+        <div id="margin-short-view" class="result-content" role="tabpanel" hidden><div class="empty"><div><span class="empty-mark" aria-hidden="true">↘</span>融資融券資料將整理成每日明細表。</div></div></div>
+        <div id="analysis-view" class="result-content" role="tabpanel" hidden><div class="empty"><div><span class="empty-mark" aria-hidden="true">✳</span>完成查詢後，可根據目前資料產生 AI 分析。</div></div></div>
+      </section>
+    </div>
+  </main>
+  <script>
+    const form = document.querySelector("#query-form");
+    const stockInput = document.querySelector("#stocks");
+    const countLabel = document.querySelector("#stock-count");
+    const runButton = document.querySelector("#run-button");
+    const saveButton = document.querySelector("#save-button");
+    const statusBox = document.querySelector("#status");
+    const statusText = document.querySelector("#status-text");
+    const institutionView = document.querySelector("#institution-view");
+    const pricesView = document.querySelector("#prices-view");
+    const marginShortView = document.querySelector("#margin-short-view");
+    const analysisView = document.querySelector("#analysis-view");
+    const downloadInstitution = document.querySelector("#download-institution");
+    const downloadPrices = document.querySelector("#download-prices");
+    const downloadMarginShort = document.querySelector("#download-margin-short");
+    const aiProvider = document.querySelector("#ai-provider");
+    const analyzeButton = document.querySelector("#analyze-button");
+    let resultData = null;
+
+    function parseStocks() {
+      return [...new Set(stockInput.value.split(/[\s,，;；]+/).map(value => value.trim()).filter(Boolean))];
+    }
+
+    function updateCount() {
+      countLabel.textContent = `${parseStocks().length} 檔`;
+    }
+
+    function setStatus(message, state = "") {
+      statusBox.hidden = !message;
+      statusBox.className = `status ${state}`;
+      statusText.textContent = message;
+    }
+
+    function make(tag, text, className) {
+      const node = document.createElement(tag);
+      if (text !== undefined) node.textContent = text;
+      if (className) node.className = className;
+      return node;
+    }
+
+    function makeTable(rows) {
+      const table = document.createElement("table");
+      const body = document.createElement("tbody");
+      rows.forEach((row, index) => {
+        const tr = document.createElement("tr");
+        row.forEach(value => {
+          const cell = document.createElement(index === 0 ? "th" : "td");
+          cell.textContent = value == null ? "" : String(value);
+          tr.append(cell);
+        });
+        body.append(tr);
+      });
+      table.append(body);
+      return table;
+    }
+
+    function renderInstitution(data) {
+      institutionView.replaceChildren();
+      const totalRows = Object.values(data).reduce((total, rows) => total + rows.length, 0);
+      institutionView.append(make("p", `${Object.keys(data).length} 檔股票 · ${totalRows} 筆明細`, "summary"));
+      Object.entries(data).forEach(([stock, rows], index) => {
+        const details = make("details", undefined, "stock-result");
+        details.open = index === 0;
+        const summary = make("summary", `${stock}　${rows.length ? `${rows.length} 列` : "無資料"}`);
+        details.append(summary);
+        if (rows.length) {
+          const body = make("div", undefined, "stock-body");
+          body.append(makeTable(rows));
+          details.append(body);
+        }
+        institutionView.append(details);
+      });
+    }
+
+    function renderPrices(data) {
+      pricesView.replaceChildren();
+      const rows = [["代號", "日期", "開盤", "最高", "最低", "收盤", "成交量"]];
+      Object.entries(data).forEach(([stock, entries]) => {
+        entries.forEach(item => rows.push([
+          stock, item["日期"], item["開盤價"], item["最高價"], item["最低價"], item["收盤價"], item["成交量"],
+        ].map(value => value == null ? "" : String(value))));
+      });
+      pricesView.append(make("p", `${Object.keys(data).length} 檔股票 · ${rows.length - 1} 筆行情`, "summary"));
+      if (rows.length > 1) {
+        const body = make("div", undefined, "stock-body");
+        body.append(makeTable(rows));
+        pricesView.append(body);
+      } else {
+        pricesView.append(make("p", "目前沒有股價資料。", "summary"));
+      }
+    }
+
+    function renderMarginShort(data) {
+      marginShortView.replaceChildren();
+      const totalRows = Object.values(data).reduce((total, rows) => total + Math.max(rows.length - 1, 0), 0);
+      marginShortView.append(make("p", `${Object.keys(data).length} 檔股票 · ${totalRows} 筆融資融券明細`, "summary"));
+      Object.entries(data).forEach(([stock, rows], index) => {
+        const details = make("details", undefined, "stock-result");
+        details.open = index === 0;
+        details.append(make("summary", `${stock}　${rows.length > 1 ? `${rows.length - 1} 筆` : "無資料"}`));
+        if (rows.length) {
+          const body = make("div", undefined, "stock-body");
+          body.append(makeTable(rows));
+          details.append(body);
+        }
+        marginShortView.append(details);
+      });
+    }
+
+    function downloadJson(filename, data) {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = make("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function timestampString() {
+      const now = new Date();
+      const year = String(now.getFullYear());
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const day = String(now.getDate()).padStart(2, "0");
+      const hours = String(now.getHours()).padStart(2, "0");
+      const minutes = String(now.getMinutes()).padStart(2, "0");
+      const seconds = String(now.getSeconds()).padStart(2, "0");
+      return `${year}${month}${day}${hours}${minutes}${seconds}`;
+    }
+
+    async function pollJob(jobId) {
+      while (true) {
+        await new Promise(resolve => window.setTimeout(resolve, 1800));
+        const response = await fetch(`/api/jobs/${jobId}`);
+        const job = await response.json();
+        if (!response.ok) throw new Error(job.error || "無法讀取查詢狀態。");
+        if (job.status === "completed") return job;
+        if (job.status === "failed") throw new Error(job.error || "查詢失敗。");
+        setStatus(job.status === "queued" ? "查詢工作排入佇列…" : "正在抓取資料，請稍候…", "running");
+      }
+    }
+
+    stockInput.addEventListener("input", updateCount);
+    saveButton.addEventListener("click", async () => {
+      const stocks = parseStocks();
+      if (!stocks.length) return setStatus("請先輸入股票代號。", "error");
+      if (stocks.some(stock => !/^\d{1,6}$/.test(stock))) return setStatus("股票代號僅能包含 1 至 6 位數字。", "error");
+      if (stocks.length > 100) return setStatus("最多可儲存 100 檔股票。", "error");
+
+      saveButton.disabled = true;
+      setStatus("正在儲存股票清單…", "running");
+      try {
+        const response = await fetch("/api/stock-list", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ stocks }),
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "無法儲存股票清單。");
+        stockInput.value = payload.stocks.join("\n");
+        updateCount();
+        setStatus("股票清單已儲存，之後載入頁面時會使用這份清單。Render 若未掛載持久磁碟，重新部署或重啟後可能還原。");
+      } catch (error) {
+        setStatus(error.message, "error");
+      } finally {
+        saveButton.disabled = false;
+      }
+    });
+    const resultViews = {
+      institution: institutionView,
+      prices: pricesView,
+      "margin-short": marginShortView,
+      analysis: analysisView,
+    };
+    document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach(item => item.setAttribute("aria-selected", String(item === tab)));
+      Object.entries(resultViews).forEach(([view, node]) => {
+        node.hidden = view !== tab.dataset.view;
+      });
+    }));
+
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const stocks = parseStocks();
+      if (!stocks.length) return setStatus("請先輸入股票代號。", "error");
+      if (stocks.some(stock => !/^\d{1,6}$/.test(stock))) return setStatus("股票代號僅能包含 1 至 6 位數字。", "error");
+      if (stocks.length > 100) return setStatus("一次最多可查詢 100 檔股票。", "error");
+
+      runButton.disabled = true;
+      downloadInstitution.disabled = true;
+      downloadPrices.disabled = true;
+      downloadMarginShort.disabled = true;
+      analyzeButton.disabled = true;
+      resultData = null;
+      setStatus("正在建立查詢工作…", "running");
+      try {
+        const response = await fetch("/api/jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ stocks }),
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "無法開始查詢。");
+        const job = await pollJob(payload.job_id);
+        resultData = job;
+        renderInstitution(job.institution_data);
+        renderPrices(job.price_data);
+        renderMarginShort(job.margin_short_data);
+        downloadInstitution.disabled = false;
+        downloadPrices.disabled = false;
+        downloadMarginShort.disabled = false;
+        analyzeButton.disabled = false;
+        analysisView.replaceChildren(make("div", "完成查詢後，可根據目前資料產生 AI 分析。", "empty"));
+        setStatus("查詢完成。結果僅暫存在目前服務執行個體，下載後請自行保存。");
+      } catch (error) {
+        setStatus(error.message, "error");
+      } finally {
+        runButton.disabled = false;
+      }
+    });
+
+    analyzeButton.addEventListener("click", async () => {
+      if (!resultData) return;
+      analyzeButton.disabled = true;
+      runButton.disabled = true;
+      analyzeButton.textContent = "分析中…";
+      analysisView.replaceChildren(make("p", "AI 正在整理法人動向與近期行情…", "summary"));
+      setStatus("正在送出查詢資料進行 AI 分析…", "running");
+      try {
+        const response = await fetch("/api/ai-analysis", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: aiProvider.value,
+            institution_data: resultData.institution_data,
+            price_data: resultData.price_data,
+            margin_short_data: resultData.margin_short_data,
+          }),
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "AI 分析失敗，請稍後再試。");
+        analysisView.replaceChildren();
+        const providerName = payload.provider === "openai" ? "ChatGPT" : "Gemini";
+        analysisView.append(make("p", `${providerName} · ${payload.model}`, "summary"));
+        analysisView.append(make("div", payload.analysis, "analysis-output"));
+        analysisView.append(make("p", "本分析僅依據本次查詢資料生成，不構成投資建議；資料可能不完整或有延遲，投資前請自行查證並評估風險。", "analysis-note"));
+        setStatus("AI 分析完成。內容僅供研究參考，不構成投資建議。");
+      } catch (error) {
+        analysisView.replaceChildren(make("p", error.message, "summary"));
+        setStatus(error.message, "error");
+      } finally {
+        analyzeButton.disabled = false;
+        runButton.disabled = false;
+        analyzeButton.textContent = "開始分析";
+      }
+    });
+
+    downloadInstitution.addEventListener("click", () => {
+      if (resultData) downloadJson(`stock_${timestampString()}.txt`, resultData.institution_data);
+    });
+    downloadPrices.addEventListener("click", () => {
+      if (resultData) downloadJson(`stock_price_30d_${timestampString()}.txt`, resultData.price_data);
+    });
+    downloadMarginShort.addEventListener("click", () => {
+      if (resultData) downloadJson(`stock_margin_short_${timestampString()}.txt`, resultData.margin_short_data);
+    });
+    updateCount();
+  </script>
+</body>
+</html>
