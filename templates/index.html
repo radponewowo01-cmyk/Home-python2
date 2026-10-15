@@ -360,7 +360,7 @@
         if (!response.ok) throw new Error(payload.error || "無法儲存股票清單。");
         stockInput.value = payload.stocks.join("\n");
         updateCount();
-        setStatus("股票清單已儲存，之後載入頁面時會使用這份清單。Render 若未掛載持久磁碟，重新部署或重啟後可能還原。");
+        setStatus("股票清單已儲存，之後載入頁面時會使用這份清單。Render 需套用持久磁碟設定，才能跨重啟保留。");
       } catch (error) {
         setStatus(error.message, "error");
       } finally {

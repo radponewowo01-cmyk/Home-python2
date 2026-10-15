@@ -17,8 +17,26 @@ jobs = OrderedDict()
 jobs_lock = threading.Lock()
 MAX_STOCKS = 100
 MAX_SAVED_JOBS = 5
-stock_list_file = Path(__file__).with_name("stock_list.json")
+default_stock_list_file = Path(__file__).with_name("stock_list.json")
+stock_list_file = Path(os.environ.get("STOCK_LIST_FILE", default_stock_list_file))
 stock_list_lock = threading.Lock()
+
+
+def initialize_stock_list_file():
+    if stock_list_file == default_stock_list_file or stock_list_file.exists():
+        return
+
+    stock_list_file.parent.mkdir(parents=True, exist_ok=True)
+    seed_contents = default_stock_list_file.read_bytes()
+    try:
+        with stock_list_file.open("xb") as target_file:
+            target_file.write(seed_contents)
+    except FileExistsError:
+        pass
+
+
+initialize_stock_list_file()
+
 AI_SYSTEM_PROMPT = (
     "你是專業的台灣股票市場研究助理。請以繁體中文，根據使用者提供的法人持股、融資融券與近30日行情資料，"
     "按以下核心分析架構撰寫報告：\n"
