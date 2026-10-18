@@ -18,4 +18,4 @@ Render Persistent Disk 需要付費 Web Service，且掛載磁碟的服務只能
 Driver={ODBC Driver 18 for SQL Server};Server=tcp:<host>,1433;Database=<database>;Uid=<user>;Pwd=<password>;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;
 ```
 
-執行環境需安裝 Microsoft SQL Server ODBC Driver 及 `requirements.txt` 中的 `pyodbc`。資料庫帳號需有建立資料表及讀寫資料的權限。第一次連線時，應用程式會建立 `dbo.StockList`（股票代號與排序）及 `dbo.StockListState`（初始化標記）；初始化時將 `stock_list.json` 匯入一次。之後資料庫是股票清單的主要來源，清單即使儲存為空也不會在重啟時重新匯入 JSON。
+Render 部署設定會先安裝 Microsoft ODBC Driver 18 及其 Linux 執行相依套件，再安裝 `requirements.txt` 中的 `pyodbc`。若部署到其他 Linux 主機，需自行安裝相容的 Microsoft SQL Server ODBC Driver。資料庫帳號需有建立資料表及讀寫資料的權限。第一次連線時，應用程式會建立 `dbo.StockList`（股票代號與排序）及 `dbo.StockListState`（初始化標記）；初始化時將 `stock_list.json` 匯入一次。之後資料庫是股票清單的主要來源，清單即使儲存為空也不會在重啟時重新匯入 JSON。

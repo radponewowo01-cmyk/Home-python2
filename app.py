@@ -27,6 +27,17 @@ class StockListStorageError(Exception):
     pass
 
 
+def format_storage_error(error):
+    details = " ".join(str(value) for value in error.args)
+    if not details:
+        details = str(error)
+    return re.sub(
+        r"(?i)\b(password|pwd|access token)\s*=\s*[^;\s]+",
+        r"\1=<redacted>",
+        details,
+    )
+
+
 def initialize_stock_list_file():
     if stock_list_file == default_stock_list_file or stock_list_file.exists():
         return
@@ -58,7 +69,7 @@ def connect_mssql():
         ) from error
     except Exception as error:
         raise StockListStorageError(
-            "無法連線 MSSQL，請檢查連線字串、ODBC Driver 與資料庫狀態。"
+            f"無法連線 MSSQL：{format_storage_error(error)}"
         ) from error
 
 
@@ -126,7 +137,9 @@ def read_stock_list():
                         )
                         return [str(row[0]) for row in cursor.fetchall()]
             except Exception as error:
-                raise StockListStorageError("無法讀取 MSSQL 股票清單。") from error
+                raise StockListStorageError(
+                    f"無法讀取 MSSQL 股票清單：{format_storage_error(error)}"
+                ) from error
 
         return [
             str(stock)
@@ -158,7 +171,9 @@ def persist_stock_list(stock_list):
                             sort_order,
                         )
         except Exception as error:
-            raise StockListStorageError("無法儲存 MSSQL 股票清單。") from error
+            raise StockListStorageError(
+                f"無法儲存 MSSQL 股票清單：{format_storage_error(error)}"
+            ) from error
 
 
 AI_SYSTEM_PROMPT = (
@@ -214,9 +229,12 @@ def run_job(job_id, stock_list):
 def index():
     try:
         stock_list = read_stock_list()
-    except StockListStorageError:
+    except StockListStorageError as error:
         app.logger.exception("載入股票清單失敗")
-        return render_template("storage-error.html"), 503
+        return render_template(
+            "storage-error.html",
+            error_message=str(error),
+        ), 503
     return render_template("index.html", stock_list=stock_list)
 
 
@@ -243,9 +261,9 @@ def save_stock_list():
 
     try:
         persist_stock_list(stock_list)
-    except StockListStorageError:
+    except StockListStorageError as error:
         app.logger.exception("儲存股票清單失敗")
-        return jsonify(error="無法儲存股票清單，請檢查 MSSQL 連線與資料庫狀態。"), 503
+        return jsonify(error=str(error)), 503
     return jsonify(message="股票清單已儲存。", stocks=stock_list)
 
 

@@ -2,7 +2,15 @@ services:
   - type: web
     name: tw-stock
     runtime: python
-    buildCommand: python -m pip install -r requirements.txt
+    buildCommand: |
+      set -e
+      curl -sSL -O https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb
+      dpkg -i packages-microsoft-prod.deb
+      rm packages-microsoft-prod.deb
+      apt-get update
+      ACCEPT_EULA=Y apt-get install -y msodbcsql18 libgssapi-krb5-2
+      odbcinst -q -d -n "ODBC Driver 18 for SQL Server"
+      python -m pip install -r requirements.txt
     startCommand: python -m gunicorn --workers 1 --threads 8 --timeout 120 app:app
     healthCheckPath: /health
     envVars:
