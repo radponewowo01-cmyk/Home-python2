@@ -21,6 +21,13 @@ jobs_lock = threading.Lock()
 MAX_STOCKS = 100
 MAX_SAVED_JOBS = 5
 MARKET_STOCK_CACHE_SECONDS = 6 * 60 * 60
+YAHOO_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
+YAHOO_SEARCH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0 Safari/537.36"
+    ),
+}
 MARKET_STOCK_SOURCES = {
     "上市": (
         "https://openapi.twse.com.tw/v1/opendata/t187ap03_L",
@@ -383,6 +390,76 @@ def get_market_stock_list():
         return stocks
 
 
+def search_yahoo_stocks(query):
+    queries = (
+        [f"{query}.TW", f"{query}.TWO"]
+        if re.fullmatch(r"\d{1,6}", query)
+        else [query]
+    )
+
+    def fetch_quotes(search_query):
+        response = requests.get(
+            YAHOO_SEARCH_URL,
+            params={
+                "q": search_query,
+                "quotesCount": 20,
+                "newsCount": 0,
+                "enableFuzzyQuery": "true",
+            },
+            headers=YAHOO_SEARCH_HEADERS,
+            timeout=10,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or not isinstance(payload.get("quotes"), list):
+            raise ValueError("Yahoo Finance 股票搜尋回應格式錯誤。")
+        return payload["quotes"]
+
+    with ThreadPoolExecutor(max_workers=len(queries)) as executor:
+        quotes = [
+            item
+            for result in executor.map(fetch_quotes, queries)
+            for item in result
+        ]
+
+    stocks = []
+    seen_symbols = set()
+    for item in quotes:
+        if not isinstance(item, dict) or item.get("quoteType") != "EQUITY":
+            continue
+        symbol = str(item.get("symbol", "")).upper()
+        match = re.fullmatch(r"(\d{1,6})\.(TW|TWO)", symbol)
+        if not match or symbol in seen_symbols:
+            continue
+        seen_symbols.add(symbol)
+        code, suffix = match.groups()
+        stocks.append({
+            "code": code,
+            "name": str(item.get("shortname") or item.get("longname") or code).strip(),
+            "market": "上市" if suffix == "TW" else "上櫃／興櫃",
+            "symbol": symbol,
+        })
+    return stocks
+
+
+def refine_stock_market_labels(stocks):
+    try:
+        official_markets = {
+            stock["code"]: stock
+            for stock in get_market_stock_list()
+        }
+    except (requests.RequestException, ValueError) as error:
+        app.logger.warning("無法取得官方市場分類，使用 Yahoo Finance 市場標記：%s", error)
+        return stocks
+
+    for stock in stocks:
+        official = official_markets.get(stock["code"])
+        if official:
+            stock["market"] = official["market"]
+            stock["name"] = official["name"]
+    return stocks
+
+
 def run_job(job_id, stock_list, markets):
     with jobs_lock:
         jobs[job_id]["status"] = "running"
@@ -430,20 +507,15 @@ def get_stock_list():
 
 @app.get("/api/market-stocks")
 def search_market_stocks():
-    query = request.args.get("q", "").strip().casefold()
+    query = request.args.get("q", "").strip()
     if not query:
         return jsonify(stocks=[])
     try:
-        stocks = get_market_stock_list()
+        matches = refine_stock_market_labels(search_yahoo_stocks(query))
     except (requests.RequestException, ValueError) as error:
-        app.logger.warning("讀取官方股票名單失敗：%s", error)
-        return jsonify(error="目前無法取得證交所／櫃買中心官方股票名單，請稍後再試。"), 503
+        app.logger.warning("Yahoo Finance 股票搜尋失敗：%s", error)
+        return jsonify(error="目前無法搜尋 Yahoo Finance 股票資料，請稍後再試。"), 503
 
-    matches = [
-        stock
-        for stock in stocks
-        if query in stock["code"].casefold() or query in stock["name"].casefold()
-    ]
     matches.sort(key=lambda stock: (stock["code"] != query, stock["code"]))
     return jsonify(stocks=matches[:20])
 
@@ -471,17 +543,32 @@ def create_job():
         return jsonify(error=error), 400
 
     try:
-        market_stocks = get_market_stock_list()
+        with ThreadPoolExecutor(max_workers=min(len(stock_list), 10)) as executor:
+            yahoo_matches = list(executor.map(search_yahoo_stocks, stock_list))
     except (requests.RequestException, ValueError) as error:
-        app.logger.warning("查詢前載入官方股票名單失敗：%s", error)
-        return jsonify(error="目前無法取得證交所／櫃買中心官方股票名單，請稍後再試。"), 503
-    stocks_by_code = {stock["code"]: stock for stock in market_stocks}
-    unknown_stocks = [stock for stock in stock_list if stock not in stocks_by_code]
+        app.logger.warning("查詢前搜尋 Yahoo Finance 失敗：%s", error)
+        return jsonify(error="目前無法搜尋 Yahoo Finance 股票資料，請稍後再試。"), 503
+    valid_codes = {
+        stock["code"]
+        for matches in yahoo_matches
+        for stock in matches
+    }
+    unknown_stocks = [stock for stock in stock_list if stock not in valid_codes]
     if unknown_stocks:
         return jsonify(
-            error=f"以下代號不在官方上市、上櫃或興櫃名單中：{', '.join(unknown_stocks)}"
+            error=f"Yahoo Finance 找不到以下台灣股票代號：{', '.join(unknown_stocks)}"
         ), 400
-    markets = {stock: stocks_by_code[stock]["market"] for stock in stock_list}
+
+    yahoo_stocks = refine_stock_market_labels([
+        stock
+        for matches in yahoo_matches
+        for stock in matches
+        if stock["code"] in stock_list
+    ])
+    markets = {
+        stock["code"]: stock["market"]
+        for stock in yahoo_stocks
+    }
 
     with jobs_lock:
         active = any(job["status"] in ("queued", "running") for job in jobs.values())

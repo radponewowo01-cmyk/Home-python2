@@ -179,12 +179,12 @@
           <input id="stock-code" class="stock-input" type="search" placeholder="輸入代號或名稱，例如 2330" aria-describedby="list-hint">
           <button id="add-button" class="save-button" type="button">新增</button>
         </div>
-        <h3 class="subsection-title">官方市場名單 <span class="count">上市／上櫃／興櫃</span></h3>
-        <ul id="market-stock-list" class="market-stock-list" aria-label="官方市場股票搜尋結果"></ul>
+        <h3 class="subsection-title">Yahoo Finance 搜尋 <span class="count">台灣股票</span></h3>
+        <ul id="market-stock-list" class="market-stock-list" aria-label="Yahoo Finance 股票搜尋結果"></ul>
         <p id="market-stock-hint" class="hint" aria-live="polite"></p>
         <h3 class="subsection-title">我的清單 <span id="stock-count" class="count"></span></h3>
         <ul id="stock-list" class="stock-list" aria-label="股票清單"></ul>
-        <p id="list-hint" class="hint">輸入官方上市、上櫃或興櫃股票代號即可直接查詢，不必先加入我的清單。可輸入多個代號，以空白或逗號分隔；按「新增」才會加入清單，最多 100 檔。</p>
+        <p id="list-hint" class="hint">輸入 Yahoo Finance 支援的台灣股票代號即可直接查詢，不必先加入我的清單。可輸入多個代號，以空白或逗號分隔；按「新增」才會加入清單，最多 100 檔。</p>
         <div class="list-actions">
           <button id="load-button" class="save-button" type="button">讀取已儲存清單</button>
           <button id="save-button" class="save-button" type="button">儲存清單</button>
@@ -285,15 +285,15 @@
       marketStockHint.textContent = "";
       if (!query) return;
 
-      marketStockHint.textContent = "正在搜尋官方市場名單…";
+      marketStockHint.textContent = "正在搜尋 Yahoo Finance…";
       marketSearchTimer = window.setTimeout(async () => {
         try {
           const response = await fetch(`/api/market-stocks?q=${encodeURIComponent(query)}`);
           const payload = await response.json();
-          if (!response.ok) throw new Error(payload.error || "無法載入官方市場名單。");
+          if (!response.ok) throw new Error(payload.error || "無法搜尋 Yahoo Finance 股票資料。");
           if (sequence !== marketSearchSequence) return;
           if (!payload.stocks.length) {
-            marketStockHint.textContent = "官方名單中沒有符合的上市、上櫃或興櫃股票。";
+            marketStockHint.textContent = "Yahoo Finance 找不到符合的台灣上市／櫃股票。";
             return;
           }
           marketStockHint.textContent = `找到 ${payload.stocks.length} 檔，選取後可直接查詢。`;

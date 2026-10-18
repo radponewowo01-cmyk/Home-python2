@@ -11,40 +11,70 @@ class MarketStockTests(unittest.TestCase):
         stock_app.market_stock_cache.update({"expires_at": 0, "stocks": []})
         self.client = stock_app.app.test_client()
 
-    def test_fetch_market_source_parses_official_fields(self):
+    def test_search_yahoo_stocks_keeps_taiwan_equities(self):
         response = mock.Mock()
-        response.json.return_value = [{
-            "SecuritiesCompanyCode": "6488",
-            "CompanyName": "環球晶圓股份有限公司",
-            "CompanyAbbreviation": "環球晶",
-        }]
+        response.json.return_value = {
+            "quotes": [
+                {
+                    "symbol": "2330.TW",
+                    "quoteType": "EQUITY",
+                    "shortname": "台積電",
+                },
+                {
+                    "symbol": "6488.TWO",
+                    "quoteType": "EQUITY",
+                    "shortname": "環球晶",
+                },
+                {
+                    "symbol": "2330.HK",
+                    "quoteType": "EQUITY",
+                    "shortname": "Foreign listing",
+                },
+                {
+                    "symbol": "00927.TW",
+                    "quoteType": "ETF",
+                    "shortname": "Taiwan ETF",
+                },
+            ],
+        }
         with mock.patch.object(stock_app.requests, "get", return_value=response) as get:
-            stocks = stock_app.fetch_market_source(
-                "興櫃",
-                stock_app.MARKET_STOCK_SOURCES["興櫃"],
-            )
+            stocks = stock_app.search_yahoo_stocks("2330")
 
-        self.assertEqual(stocks, [{"code": "6488", "name": "環球晶", "market": "興櫃"}])
-        get.assert_called_once_with(
-            "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_R",
-            timeout=15,
+        self.assertEqual(
+            stocks,
+            [
+                {"code": "2330", "name": "台積電", "market": "上市", "symbol": "2330.TW"},
+                {"code": "6488", "name": "環球晶", "market": "上櫃／興櫃", "symbol": "6488.TWO"},
+            ],
+        )
+        self.assertEqual(get.call_count, 2)
+        self.assertEqual(
+            {call.kwargs["params"]["q"] for call in get.call_args_list},
+            {"2330.TW", "2330.TWO"},
         )
 
-    def test_market_search_returns_matches_from_official_list(self):
+    def test_market_search_uses_yahoo_finance(self):
         official_stocks = [
             {"code": "2330", "name": "台積電", "market": "上市"},
             {"code": "6488", "name": "環球晶", "market": "興櫃"},
         ]
-        with mock.patch.object(stock_app, "get_market_stock_list", return_value=official_stocks):
+        yahoo_stocks = [
+            {"code": "2330", "name": "Taiwan Semiconductor", "market": "上市", "symbol": "2330.TW"},
+        ]
+        with (
+            mock.patch.object(stock_app, "search_yahoo_stocks", return_value=yahoo_stocks),
+            mock.patch.object(stock_app, "get_market_stock_list", return_value=official_stocks),
+        ):
             response = self.client.get("/api/market-stocks?q=環球")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json["stocks"], [official_stocks[1]])
+        self.assertEqual(response.json["stocks"][0]["code"], "2330")
+        self.assertEqual(response.json["stocks"][0]["market"], "上市")
 
     def test_query_accepts_stock_not_in_saved_list(self):
-        official_stocks = [
-            {"code": "2330", "name": "台積電", "market": "上市"},
-        ]
+        yahoo_matches = [[
+            {"code": "2330", "name": "Taiwan Semiconductor", "market": "上市", "symbol": "2330.TW"},
+        ]]
 
         class CapturedThread:
             def __init__(self, target, args, daemon):
@@ -55,8 +85,18 @@ class MarketStockTests(unittest.TestCase):
             def start(self):
                 pass
 
+        executor = mock.MagicMock()
+        executor.__enter__.return_value = executor
+        executor.map.side_effect = lambda function, values: map(function, values)
+
         with (
-            mock.patch.object(stock_app, "get_market_stock_list", return_value=official_stocks),
+            mock.patch.object(stock_app, "search_yahoo_stocks", side_effect=yahoo_matches),
+            mock.patch.object(
+                stock_app,
+                "get_market_stock_list",
+                return_value=[{"code": "2330", "name": "台積電", "market": "上市"}],
+            ),
+            mock.patch.object(stock_app, "ThreadPoolExecutor", return_value=executor),
             mock.patch.object(stock_app.threading, "Thread", CapturedThread),
         ):
             response = self.client.post("/api/jobs", json={"stocks": ["2330"]})
@@ -67,11 +107,11 @@ class MarketStockTests(unittest.TestCase):
         self.assertEqual(job["markets"], {"2330": "上市"})
 
     def test_query_rejects_code_outside_official_markets(self):
-        with mock.patch.object(stock_app, "get_market_stock_list", return_value=[]):
+        with mock.patch.object(stock_app, "search_yahoo_stocks", return_value=[]):
             response = self.client.post("/api/jobs", json={"stocks": ["9999"]})
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn("不在官方上市、上櫃或興櫃名單中", response.json["error"])
+        self.assertIn("Yahoo Finance 找不到", response.json["error"])
 
 
 if __name__ == "__main__":
