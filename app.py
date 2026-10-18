@@ -2,8 +2,10 @@ import json
 import os
 import re
 import threading
+import time
 import uuid
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 
@@ -18,9 +20,29 @@ jobs = OrderedDict()
 jobs_lock = threading.Lock()
 MAX_STOCKS = 100
 MAX_SAVED_JOBS = 5
+MARKET_STOCK_CACHE_SECONDS = 6 * 60 * 60
+MARKET_STOCK_SOURCES = {
+    "上市": (
+        "https://openapi.twse.com.tw/v1/opendata/t187ap03_L",
+        "公司代號",
+        ("公司簡稱", "公司名稱"),
+    ),
+    "上櫃": (
+        "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O",
+        "SecuritiesCompanyCode",
+        ("CompanyAbbreviation", "CompanyName"),
+    ),
+    "興櫃": (
+        "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_R",
+        "SecuritiesCompanyCode",
+        ("CompanyAbbreviation", "CompanyName"),
+    ),
+}
 default_stock_list_file = Path(__file__).with_name("stock_list.json")
 stock_list_file = Path(os.environ.get("STOCK_LIST_FILE", default_stock_list_file))
 stock_list_lock = threading.Lock()
+market_stock_cache = {"expires_at": 0, "stocks": []}
+market_stock_cache_lock = threading.Lock()
 
 
 class StockListStorageError(Exception):
@@ -311,7 +333,57 @@ def validate_stock_list(raw_stocks, allow_empty=False):
     return stock_list, None
 
 
-def run_job(job_id, stock_list):
+def fetch_market_source(market, source):
+    url, code_key, name_keys = source
+    response = requests.get(url, timeout=15)
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list):
+        raise ValueError(f"{market}官方股票名單格式錯誤。")
+
+    stocks = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get(code_key, "")).strip()
+        name = next(
+            (str(item[key]).strip() for key in name_keys if item.get(key)),
+            "",
+        )
+        if re.fullmatch(r"\d{1,6}", code) and name:
+            stocks.append({"code": code, "name": name, "market": market})
+    if not stocks:
+        raise ValueError(f"無法讀取{market}官方股票名單。")
+    return stocks
+
+
+def get_market_stock_list():
+    with market_stock_cache_lock:
+        if market_stock_cache["expires_at"] > time.monotonic():
+            return market_stock_cache["stocks"]
+
+        with ThreadPoolExecutor(max_workers=len(MARKET_STOCK_SOURCES)) as executor:
+            futures = {
+                executor.submit(fetch_market_source, market, source): market
+                for market, source in MARKET_STOCK_SOURCES.items()
+            }
+            stocks_by_market = {}
+            for future, market in futures.items():
+                stocks_by_market[market] = future.result()
+
+        stocks_by_code = {}
+        for market in ("上市", "上櫃", "興櫃"):
+            for stock in stocks_by_market[market]:
+                stocks_by_code.setdefault(stock["code"], stock)
+        stocks = list(stocks_by_code.values())
+        market_stock_cache.update({
+            "expires_at": time.monotonic() + MARKET_STOCK_CACHE_SECONDS,
+            "stocks": stocks,
+        })
+        return stocks
+
+
+def run_job(job_id, stock_list, markets):
     with jobs_lock:
         jobs[job_id]["status"] = "running"
     try:
@@ -319,6 +391,7 @@ def run_job(job_id, stock_list):
         with jobs_lock:
             jobs[job_id].update({
                 "status": "completed",
+                "markets": markets,
                 "institution_data": institution_data,
                 "price_data": price_data,
                 "margin_short_data": margin_short_data,
@@ -355,6 +428,26 @@ def get_stock_list():
         return jsonify(error=str(error)), 503
 
 
+@app.get("/api/market-stocks")
+def search_market_stocks():
+    query = request.args.get("q", "").strip().casefold()
+    if not query:
+        return jsonify(stocks=[])
+    try:
+        stocks = get_market_stock_list()
+    except (requests.RequestException, ValueError) as error:
+        app.logger.warning("讀取官方股票名單失敗：%s", error)
+        return jsonify(error="目前無法取得證交所／櫃買中心官方股票名單，請稍後再試。"), 503
+
+    matches = [
+        stock
+        for stock in stocks
+        if query in stock["code"].casefold() or query in stock["name"].casefold()
+    ]
+    matches.sort(key=lambda stock: (stock["code"] != query, stock["code"]))
+    return jsonify(stocks=matches[:20])
+
+
 @app.post("/api/stock-list")
 def save_stock_list():
     payload = request.get_json(silent=True) or {}
@@ -377,16 +470,33 @@ def create_job():
     if error:
         return jsonify(error=error), 400
 
+    try:
+        market_stocks = get_market_stock_list()
+    except (requests.RequestException, ValueError) as error:
+        app.logger.warning("查詢前載入官方股票名單失敗：%s", error)
+        return jsonify(error="目前無法取得證交所／櫃買中心官方股票名單，請稍後再試。"), 503
+    stocks_by_code = {stock["code"]: stock for stock in market_stocks}
+    unknown_stocks = [stock for stock in stock_list if stock not in stocks_by_code]
+    if unknown_stocks:
+        return jsonify(
+            error=f"以下代號不在官方上市、上櫃或興櫃名單中：{', '.join(unknown_stocks)}"
+        ), 400
+    markets = {stock: stocks_by_code[stock]["market"] for stock in stock_list}
+
     with jobs_lock:
         active = any(job["status"] in ("queued", "running") for job in jobs.values())
         if active:
             return jsonify(error="目前已有查詢工作進行中，請稍後再試。"), 409
         job_id = uuid.uuid4().hex
-        jobs[job_id] = {"status": "queued", "stocks": stock_list}
+        jobs[job_id] = {"status": "queued", "stocks": stock_list, "markets": markets}
         while len(jobs) > MAX_SAVED_JOBS:
             jobs.popitem(last=False)
 
-    threading.Thread(target=run_job, args=(job_id, stock_list), daemon=True).start()
+    threading.Thread(
+        target=run_job,
+        args=(job_id, stock_list, markets),
+        daemon=True,
+    ).start()
     return jsonify(job_id=job_id), 202
 
 

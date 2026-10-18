@@ -58,7 +58,11 @@
       background: #fbfcf8; color: var(--ink); font: 13px ui-monospace, Consolas, monospace; outline: none;
     }
     .stock-input:focus { border-color: var(--green); box-shadow: 0 0 0 3px var(--soft-green); }
-    .stock-list { display: grid; gap: 6px; min-height: 80px; max-height: 250px; margin: 10px 0 0; padding: 0; overflow: auto; list-style: none; }
+    .stock-list { display: grid; gap: 6px; min-height: 80px; max-height: 200px; margin: 8px 0 0; padding: 0; overflow: auto; list-style: none; }
+    .subsection-title { display: flex; align-items: center; justify-content: space-between; margin: 15px 0 0; font-size: 12px; }
+    .market-stock-list { display: grid; gap: 5px; max-height: 180px; margin: 7px 0 0; padding: 0; overflow: auto; list-style: none; }
+    .market-stock-option { width: 100%; padding: 7px 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); background: #fbfcf8; text-align: left; font-size: 12px; }
+    .market-stock-option:hover { border-color: var(--green); color: var(--green-dark); }
     .stock-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; background: #fbfcf8; font: 13px ui-monospace, Consolas, monospace; }
     .stock-item[hidden] { display: none; }
     .delete-stock {
@@ -76,7 +80,7 @@
     .run-button:hover:not(:disabled) { background: var(--green-dark); }
     .run-button:disabled { cursor: wait; opacity: .72; }
     .run-icon { font-size: 16px; }
-    .form-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .form-actions { display: grid; grid-template-columns: 1fr; gap: 8px; }
     .list-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
     .save-button {
       min-height: 43px; border: 1px solid var(--line); border-radius: 4px;
@@ -141,7 +145,8 @@
       .source-note { white-space: normal; }
       .workspace { grid-template-columns: 1fr; gap: 14px; }
       .control-panel { position: static; padding: 17px; }
-      .stock-list { max-height: 190px; }
+      .stock-list { max-height: 150px; }
+      .market-stock-list { max-height: 135px; }
       .results-head { align-items: start; flex-direction: column; padding: 14px; }
       .downloads { width: 100%; }
       .download { flex: 1; }
@@ -167,16 +172,19 @@
     <div class="workspace">
       <form id="query-form" class="control-panel">
         <div class="section-title">
-          <h2>股票清單</h2>
-          <span id="stock-count" class="count"></span>
+          <h2>股票查詢</h2>
         </div>
         <label for="stock-code">查詢或新增股票代號</label>
         <div class="stock-entry">
-          <input id="stock-code" class="stock-input" type="search" inputmode="numeric" placeholder="輸入代號查詢；按新增加入清單" aria-describedby="list-hint">
+          <input id="stock-code" class="stock-input" type="search" placeholder="輸入代號或名稱，例如 2330" aria-describedby="list-hint">
           <button id="add-button" class="save-button" type="button">新增</button>
         </div>
+        <h3 class="subsection-title">官方市場名單 <span class="count">上市／上櫃／興櫃</span></h3>
+        <ul id="market-stock-list" class="market-stock-list" aria-label="官方市場股票搜尋結果"></ul>
+        <p id="market-stock-hint" class="hint" aria-live="polite"></p>
+        <h3 class="subsection-title">我的清單 <span id="stock-count" class="count"></span></h3>
         <ul id="stock-list" class="stock-list" aria-label="股票清單"></ul>
-        <p id="list-hint" class="hint">可輸入多個代號，以空白或逗號分隔；最多 100 檔。新增、刪除後按儲存才會更新預設清單。</p>
+        <p id="list-hint" class="hint">輸入官方上市、上櫃或興櫃股票代號即可直接查詢，不必先加入我的清單。可輸入多個代號，以空白或逗號分隔；按「新增」才會加入清單，最多 100 檔。</p>
         <div class="list-actions">
           <button id="load-button" class="save-button" type="button">讀取已儲存清單</button>
           <button id="save-button" class="save-button" type="button">儲存清單</button>
@@ -208,7 +216,7 @@
           </div>
         </div>
         <div id="status" class="status" role="status" aria-live="polite" hidden><span class="status-dot" aria-hidden="true"></span><span id="status-text"></span></div>
-        <div id="institution-view" class="result-content" role="tabpanel"><div class="empty"><div><span class="empty-mark" aria-hidden="true">↘</span>編輯左側清單後執行查詢，結果會顯示在這裡。</div></div></div>
+        <div id="institution-view" class="result-content" role="tabpanel"><div class="empty"><div><span class="empty-mark" aria-hidden="true">↘</span>輸入股票代號後執行查詢，結果會顯示在這裡。</div></div></div>
         <div id="prices-view" class="result-content" role="tabpanel" hidden><div class="empty"><div><span class="empty-mark" aria-hidden="true">↘</span>近 30 日股價將整理成每日行情表。</div></div></div>
         <div id="margin-short-view" class="result-content" role="tabpanel" hidden><div class="empty"><div><span class="empty-mark" aria-hidden="true">↘</span>融資融券資料將整理成每日明細表。</div></div></div>
         <div id="analysis-view" class="result-content" role="tabpanel" hidden><div class="empty"><div><span class="empty-mark" aria-hidden="true">✳</span>完成查詢後，可根據目前資料產生 AI 分析。</div></div></div>
@@ -219,6 +227,8 @@
     const form = document.querySelector("#query-form");
     const stockCodeInput = document.querySelector("#stock-code");
     const stockListView = document.querySelector("#stock-list");
+    const marketStockListView = document.querySelector("#market-stock-list");
+    const marketStockHint = document.querySelector("#market-stock-hint");
     const countLabel = document.querySelector("#stock-count");
     const runButton = document.querySelector("#run-button");
     const saveButton = document.querySelector("#save-button");
@@ -237,6 +247,8 @@
     const analyzeButton = document.querySelector("#analyze-button");
     let stockList = {{ stock_list|tojson }};
     let resultData = null;
+    let marketSearchTimer = null;
+    let marketSearchSequence = 0;
 
     function parseStockCodes(value) {
       return [...new Set(value.split(/[\s,，;；]+/).map(stock => stock.trim()).filter(Boolean))];
@@ -245,6 +257,7 @@
     function updateCount() {
       countLabel.textContent = `${stockList.length} 檔`;
       const query = stockCodeInput.value.trim();
+      searchMarketStocks(query);
       stockListView.replaceChildren();
       const matchingStocks = stockList.filter(stock => stock.includes(query));
       if (!matchingStocks.length) {
@@ -263,6 +276,41 @@
         item.append(removeButton);
         stockListView.append(item);
       });
+    }
+
+    function searchMarketStocks(query) {
+      window.clearTimeout(marketSearchTimer);
+      const sequence = ++marketSearchSequence;
+      marketStockListView.replaceChildren();
+      marketStockHint.textContent = "";
+      if (!query) return;
+
+      marketStockHint.textContent = "正在搜尋官方市場名單…";
+      marketSearchTimer = window.setTimeout(async () => {
+        try {
+          const response = await fetch(`/api/market-stocks?q=${encodeURIComponent(query)}`);
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.error || "無法載入官方市場名單。");
+          if (sequence !== marketSearchSequence) return;
+          if (!payload.stocks.length) {
+            marketStockHint.textContent = "官方名單中沒有符合的上市、上櫃或興櫃股票。";
+            return;
+          }
+          marketStockHint.textContent = `找到 ${payload.stocks.length} 檔，選取後可直接查詢。`;
+          payload.stocks.forEach(stock => {
+            const item = make("li");
+            const button = make("button", `${stock.code}　${stock.name}　${stock.market}`, "market-stock-option");
+            button.type = "button";
+            button.dataset.stock = stock.code;
+            item.append(button);
+            marketStockListView.append(item);
+          });
+        } catch (error) {
+          if (sequence === marketSearchSequence) {
+            marketStockHint.textContent = error.message;
+          }
+        }
+      }, 250);
     }
 
     function setStatus(message, state = "") {
@@ -294,14 +342,14 @@
       return table;
     }
 
-    function renderInstitution(data) {
+    function renderInstitution(data, markets) {
       institutionView.replaceChildren();
       const totalRows = Object.values(data).reduce((total, rows) => total + rows.length, 0);
       institutionView.append(make("p", `${Object.keys(data).length} 檔股票 · ${totalRows} 筆明細`, "summary"));
       Object.entries(data).forEach(([stock, rows], index) => {
         const details = make("details", undefined, "stock-result");
         details.open = index === 0;
-        const summary = make("summary", `${stock}　${rows.length ? `${rows.length} 列` : "無資料"}`);
+        const summary = make("summary", `${stock}　${markets[stock]}　${rows.length ? `${rows.length} 列` : "無資料"}`);
         details.append(summary);
         if (rows.length) {
           const body = make("div", undefined, "stock-body");
@@ -312,12 +360,12 @@
       });
     }
 
-    function renderPrices(data) {
+    function renderPrices(data, markets) {
       pricesView.replaceChildren();
       const rows = [["代號", "日期", "開盤", "最高", "最低", "收盤", "成交量"]];
       Object.entries(data).forEach(([stock, entries]) => {
         entries.forEach(item => rows.push([
-          stock, item["日期"], item["開盤價"], item["最高價"], item["最低價"], item["收盤價"], item["成交量"],
+          `${stock} ${markets[stock]}`, item["日期"], item["開盤價"], item["最高價"], item["最低價"], item["收盤價"], item["成交量"],
         ].map(value => value == null ? "" : String(value))));
       });
       pricesView.append(make("p", `${Object.keys(data).length} 檔股票 · ${rows.length - 1} 筆行情`, "summary"));
@@ -330,14 +378,14 @@
       }
     }
 
-    function renderMarginShort(data) {
+    function renderMarginShort(data, markets) {
       marginShortView.replaceChildren();
       const totalRows = Object.values(data).reduce((total, rows) => total + Math.max(rows.length - 1, 0), 0);
       marginShortView.append(make("p", `${Object.keys(data).length} 檔股票 · ${totalRows} 筆融資融券明細`, "summary"));
       Object.entries(data).forEach(([stock, rows], index) => {
         const details = make("details", undefined, "stock-result");
         details.open = index === 0;
-        details.append(make("summary", `${stock}　${rows.length > 1 ? `${rows.length - 1} 筆` : "無資料"}`));
+        details.append(make("summary", `${stock}　${markets[stock]}　${rows.length > 1 ? `${rows.length - 1} 筆` : "無資料"}`));
         if (rows.length) {
           const body = make("div", undefined, "stock-body");
           body.append(makeTable(rows));
@@ -397,11 +445,12 @@
     }
 
     addButton.addEventListener("click", addStocks);
-    stockCodeInput.addEventListener("keydown", event => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        addStocks();
-      }
+    marketStockListView.addEventListener("click", event => {
+      const button = event.target.closest("button[data-stock]");
+      if (!button) return;
+      stockCodeInput.value = button.dataset.stock;
+      updateCount();
+      stockCodeInput.focus();
     });
     stockCodeInput.addEventListener("input", updateCount);
     stockListView.addEventListener("click", event => {
@@ -462,7 +511,7 @@
 
     form.addEventListener("submit", async event => {
       event.preventDefault();
-      const stocks = stockList;
+      const stocks = parseStockCodes(stockCodeInput.value);
       if (!stocks.length) return setStatus("請先輸入股票代號。", "error");
       if (stocks.some(stock => !/^\d{1,6}$/.test(stock))) return setStatus("股票代號僅能包含 1 至 6 位數字。", "error");
       if (stocks.length > 100) return setStatus("一次最多可查詢 100 檔股票。", "error");
@@ -484,9 +533,9 @@
         if (!response.ok) throw new Error(payload.error || "無法開始查詢。");
         const job = await pollJob(payload.job_id);
         resultData = job;
-        renderInstitution(job.institution_data);
-        renderPrices(job.price_data);
-        renderMarginShort(job.margin_short_data);
+        renderInstitution(job.institution_data, job.markets);
+        renderPrices(job.price_data, job.markets);
+        renderMarginShort(job.margin_short_data, job.markets);
         downloadInstitution.disabled = false;
         downloadPrices.disabled = false;
         downloadMarginShort.disabled = false;
