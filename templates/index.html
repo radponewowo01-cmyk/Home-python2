@@ -184,7 +184,7 @@
         <p id="market-stock-hint" class="hint" aria-live="polite"></p>
         <h3 class="subsection-title">我的清單 <span id="stock-count" class="count"></span></h3>
         <ul id="stock-list" class="stock-list" aria-label="股票清單"></ul>
-        <p id="list-hint" class="hint">輸入 Yahoo Finance 支援的台灣股票代號即可直接查詢，不必先加入我的清單。可輸入多個代號，以空白或逗號分隔；按「新增」才會加入清單，最多 100 檔。</p>
+        <p id="list-hint" class="hint">輸入 Yahoo Finance 支援的台灣股票代號即可直接查詢，不必先加入我的清單。新增後按「儲存清單」保留變更；刪除會立即儲存。最多 100 檔。</p>
         <div class="list-actions">
           <button id="load-button" class="save-button" type="button">讀取已儲存清單</button>
           <button id="save-button" class="save-button" type="button">儲存清單</button>
@@ -249,6 +249,7 @@
     let resultData = null;
     let marketSearchTimer = null;
     let marketSearchSequence = 0;
+    let stockListBusy = false;
 
     function parseStockCodes(value) {
       return [...new Set(value.split(/[\s,，;；]+/).map(stock => stock.trim()).filter(Boolean))];
@@ -317,6 +318,27 @@
       statusBox.hidden = !message;
       statusBox.className = `status ${state}`;
       statusText.textContent = message;
+    }
+
+    function setStockListControlsDisabled(disabled) {
+      stockCodeInput.disabled = disabled;
+      addButton.disabled = disabled;
+      loadButton.disabled = disabled;
+      saveButton.disabled = disabled;
+      stockListView.querySelectorAll("button").forEach(button => {
+        button.disabled = disabled;
+      });
+    }
+
+    async function persistStockList(stocks) {
+      const response = await fetch("/api/stock-list", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stocks }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "無法儲存股票清單。");
+      return payload.stocks;
     }
 
     function make(tag, text, className) {
@@ -429,6 +451,7 @@
     }
 
     function addStocks() {
+      if (stockListBusy) return;
       const stocks = parseStockCodes(stockCodeInput.value);
       if (!stocks.length) return setStatus("請輸入要新增的股票代號。", "error");
       if (stocks.some(stock => !/^\d{1,6}$/.test(stock))) {
@@ -453,15 +476,31 @@
       stockCodeInput.focus();
     });
     stockCodeInput.addEventListener("input", updateCount);
-    stockListView.addEventListener("click", event => {
+    stockListView.addEventListener("click", async event => {
       const button = event.target.closest("button[data-stock]");
-      if (!button) return;
+      if (!button || stockListBusy) return;
+      const previousStockList = stockList;
+      stockListBusy = true;
       stockList = stockList.filter(stock => stock !== button.dataset.stock);
       updateCount();
-      setStatus(`已刪除股票 ${button.dataset.stock}，請儲存清單以保留變更。`);
+      setStockListControlsDisabled(true);
+      setStatus(`正在刪除股票 ${button.dataset.stock} 並儲存清單…`, "running");
+      try {
+        stockList = await persistStockList(stockList);
+        setStatus(`已刪除股票 ${button.dataset.stock}，清單已儲存。`);
+      } catch (error) {
+        stockList = previousStockList;
+        setStatus(`刪除未完成：${error.message}`, "error");
+      } finally {
+        stockListBusy = false;
+        updateCount();
+        setStockListControlsDisabled(false);
+      }
     });
     loadButton.addEventListener("click", async () => {
-      loadButton.disabled = true;
+      if (stockListBusy) return;
+      stockListBusy = true;
+      setStockListControlsDisabled(true);
       setStatus("正在讀取已儲存的股票清單…", "running");
       try {
         const response = await fetch("/api/stock-list");
@@ -473,27 +512,24 @@
       } catch (error) {
         setStatus(error.message, "error");
       } finally {
-        loadButton.disabled = false;
+        stockListBusy = false;
+        setStockListControlsDisabled(false);
       }
     });
     saveButton.addEventListener("click", async () => {
-      saveButton.disabled = true;
+      if (stockListBusy) return;
+      stockListBusy = true;
+      setStockListControlsDisabled(true);
       setStatus("正在儲存股票清單…", "running");
       try {
-        const response = await fetch("/api/stock-list", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ stocks: stockList }),
-        });
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || "無法儲存股票清單。");
-        stockList = payload.stocks;
+        stockList = await persistStockList(stockList);
         updateCount();
         setStatus("股票清單已儲存，之後載入頁面時會使用這份清單。Render 需套用持久磁碟設定，才能跨重啟保留。");
       } catch (error) {
         setStatus(error.message, "error");
       } finally {
-        saveButton.disabled = false;
+        stockListBusy = false;
+        setStockListControlsDisabled(false);
       }
     });
     const resultViews = {

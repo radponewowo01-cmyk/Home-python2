@@ -113,6 +113,16 @@ class MarketStockTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("Yahoo Finance 找不到", response.json["error"])
 
+    def test_saving_stock_list_persists_remaining_stocks_after_delete(self):
+        with mock.patch.object(stock_app, "persist_stock_list") as persist:
+            response = self.client.post(
+                "/api/stock-list",
+                json={"stocks": ["2330"]},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        persist.assert_called_once_with(["2330"])
+
 
 if __name__ == "__main__":
     unittest.main()
