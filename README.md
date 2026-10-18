@@ -12,7 +12,7 @@ Render Persistent Disk 需要付費 Web Service，且掛載磁碟的服務只能
 
 ## 使用 MSSQL 儲存股票清單
 
-設定 `MSSQL_CONNECTION_STRING` 環境變數後，網頁的股票清單讀取及儲存會改用 MSSQL；未設定時仍使用 `STOCK_LIST_FILE` 指定的 JSON 檔案。請將連線字串設在服務的環境變數或 Secret 管理中，不要提交到程式碼或版控。連線字串格式範例：
+設定 `MSSQL_CONNECTION_STRING` 環境變數後，網頁的股票清單讀取及儲存會改用 MSSQL；未設定時仍使用 `STOCK_LIST_FILE` 指定的 JSON 檔案。請將連線字串設在服務的環境變數或 Secret 管理中，不要提交到程式碼或版控。可直接使用 Somee 提供的 .NET 格式（`workstation id`、`data source`、`user id`、`pwd`、`initial catalog`）；應用程式會轉成 ODBC Driver 18 格式。也接受已包含 `Driver=` 的 ODBC 格式，例如：
 
 ```text
 Driver={ODBC Driver 18 for SQL Server};Server=tcp:<host>,1433;Database=<database>;Uid=<user>;Pwd=<password>;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;

@@ -54,6 +54,113 @@ def initialize_stock_list_file():
 initialize_stock_list_file()
 
 
+def parse_dotnet_connection_string(connection_string):
+    settings = {}
+    parts = []
+    current = []
+    quote = None
+    in_braces = False
+    index = 0
+
+    while index < len(connection_string):
+        char = connection_string[index]
+        if in_braces:
+            current.append(char)
+            if char == "}":
+                if index + 1 < len(connection_string) and connection_string[index + 1] == "}":
+                    current.append("}")
+                    index += 1
+                else:
+                    in_braces = False
+        elif quote:
+            current.append(char)
+            if char == quote:
+                if index + 1 < len(connection_string) and connection_string[index + 1] == quote:
+                    current.append(quote)
+                    index += 1
+                else:
+                    quote = None
+        elif char == "{" and (
+            not current
+            or "=" in current
+            and not "".join(current[current.index("=") + 1 :]).strip()
+        ):
+            in_braces = True
+            current.append(char)
+        elif char in ("'", '"') and (
+            not current
+            or "=" in current
+            and not "".join(current[current.index("=") + 1 :]).strip()
+        ):
+            quote = char
+            current.append(char)
+        elif char == ";":
+            parts.append("".join(current))
+            current.clear()
+        else:
+            current.append(char)
+        index += 1
+
+    if in_braces or quote:
+        raise ValueError("連線字串的括號或引號未成對。")
+    if current:
+        parts.append("".join(current))
+
+    for part in parts:
+        if not part.strip():
+            continue
+        key, separator, value = part.partition("=")
+        if not separator or not key.strip():
+            raise ValueError("連線字串格式錯誤，欄位必須為 key=value。")
+        key = re.sub(r"[\s_-]+", "", key).casefold()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == "{" and value[-1] == "}":
+            value = value[1:-1].replace("}}", "}")
+        elif len(value) >= 2 and value[0] in ("'", '"') and value[-1] == value[0]:
+            value = value[1:-1].replace(value[0] * 2, value[0])
+        settings[key] = value
+    return settings
+
+
+def _odbc_value(value):
+    return "{" + value.replace("}", "}}") + "}"
+
+
+def to_odbc_connection_string(connection_string):
+    settings = parse_dotnet_connection_string(connection_string)
+    if "driver" in settings:
+        return connection_string
+
+    aliases = {
+        "server": ("server", "datasource", "address", "addr", "networkaddress"),
+        "database": ("database", "initialcatalog"),
+        "user": ("uid", "userid", "user", "username"),
+        "password": ("pwd", "password"),
+    }
+    normalized = {}
+    for target, keys in aliases.items():
+        value = next((settings[key] for key in keys if key in settings), None)
+        if value is None:
+            raise ValueError(f"Somee 連線字串缺少必要欄位：{target}")
+        normalized[target] = value
+
+    converted = [
+        f"DRIVER={_odbc_value('ODBC Driver 18 for SQL Server')}",
+        f"SERVER={_odbc_value(normalized['server'])}",
+        f"DATABASE={_odbc_value(normalized['database'])}",
+        f"UID={_odbc_value(normalized['user'])}",
+        f"PWD={_odbc_value(normalized['password'])}",
+    ]
+    for key in ("encrypt", "trustservercertificate"):
+        if key in settings:
+            converted.append(f"{key}={_odbc_value(settings[key])}")
+    if "encrypt" not in settings:
+        converted.append("Encrypt=yes")
+    if "trustservercertificate" not in settings:
+        converted.append("TrustServerCertificate=yes")
+    return ";".join(converted)
+
+
 def connect_mssql():
     connection_string = os.environ.get("MSSQL_CONNECTION_STRING")
     if not connection_string:
@@ -61,12 +168,18 @@ def connect_mssql():
 
     try:
         import pyodbc
-
-        return pyodbc.connect(connection_string, timeout=5)
     except ImportError as error:
         raise StockListStorageError(
             "MSSQL 模式需要安裝 pyodbc，請依 requirements.txt 安裝相依套件。"
         ) from error
+
+    try:
+        odbc_connection_string = to_odbc_connection_string(connection_string)
+    except ValueError as error:
+        raise StockListStorageError(str(error)) from error
+
+    try:
+        return pyodbc.connect(odbc_connection_string, timeout=5)
     except Exception as error:
         raise StockListStorageError(
             f"無法連線 MSSQL：{format_storage_error(error)}"
