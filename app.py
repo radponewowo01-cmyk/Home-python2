@@ -4,6 +4,7 @@ import re
 import threading
 import uuid
 from collections import OrderedDict
+from contextlib import closing
 from pathlib import Path
 
 import requests
@@ -22,6 +23,10 @@ stock_list_file = Path(os.environ.get("STOCK_LIST_FILE", default_stock_list_file
 stock_list_lock = threading.Lock()
 
 
+class StockListStorageError(Exception):
+    pass
+
+
 def initialize_stock_list_file():
     if stock_list_file == default_stock_list_file or stock_list_file.exists():
         return
@@ -36,6 +41,125 @@ def initialize_stock_list_file():
 
 
 initialize_stock_list_file()
+
+
+def connect_mssql():
+    connection_string = os.environ.get("MSSQL_CONNECTION_STRING")
+    if not connection_string:
+        return None
+
+    try:
+        import pyodbc
+
+        return pyodbc.connect(connection_string, timeout=5)
+    except ImportError as error:
+        raise StockListStorageError(
+            "MSSQL 模式需要安裝 pyodbc，請依 requirements.txt 安裝相依套件。"
+        ) from error
+    except Exception as error:
+        raise StockListStorageError(
+            "無法連線 MSSQL，請檢查連線字串、ODBC Driver 與資料庫狀態。"
+        ) from error
+
+
+def initialize_mssql_stock_list(cursor):
+    cursor.execute(
+        """
+        IF OBJECT_ID(N'dbo.StockList', N'U') IS NULL
+        BEGIN
+            CREATE TABLE dbo.StockList (
+                stock_code varchar(6) NOT NULL PRIMARY KEY,
+                sort_order int NOT NULL
+            )
+        END
+        """
+    )
+    cursor.execute(
+        """
+        IF OBJECT_ID(N'dbo.StockListState', N'U') IS NULL
+        BEGIN
+            CREATE TABLE dbo.StockListState (
+                state_id tinyint NOT NULL PRIMARY KEY,
+                initialized bit NOT NULL,
+                CONSTRAINT CK_StockListState_Singleton CHECK (state_id = 1)
+            )
+        END
+        """
+    )
+    cursor.execute(
+        """
+        SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+        SELECT state_id
+        FROM dbo.StockListState WITH (UPDLOCK, HOLDLOCK)
+        WHERE state_id = 1
+        """
+    )
+    if cursor.fetchone() is not None:
+        return
+
+    seed_stocks = [
+        str(stock)
+        for stock in json.loads(stock_list_file.read_text(encoding="utf-8"))
+    ]
+    for sort_order, stock in enumerate(seed_stocks):
+        cursor.execute(
+            "INSERT INTO dbo.StockList (stock_code, sort_order) VALUES (?, ?)",
+            stock,
+            sort_order,
+        )
+    cursor.execute(
+        "INSERT INTO dbo.StockListState (state_id, initialized) VALUES (1, 1)"
+    )
+
+
+def read_stock_list():
+    with stock_list_lock:
+        connection = connect_mssql()
+        if connection is not None:
+            try:
+                with closing(connection):
+                    with connection:
+                        cursor = connection.cursor()
+                        initialize_mssql_stock_list(cursor)
+                        cursor.execute(
+                            "SELECT stock_code FROM dbo.StockList ORDER BY sort_order"
+                        )
+                        return [str(row[0]) for row in cursor.fetchall()]
+            except Exception as error:
+                raise StockListStorageError("無法讀取 MSSQL 股票清單。") from error
+
+        return [
+            str(stock)
+            for stock in json.loads(stock_list_file.read_text(encoding="utf-8"))
+        ]
+
+
+def persist_stock_list(stock_list):
+    with stock_list_lock:
+        connection = connect_mssql()
+        if connection is None:
+            stock_list_file.write_text(
+                json.dumps(stock_list, indent=2),
+                encoding="utf-8",
+            )
+            return
+
+        try:
+            with closing(connection):
+                with connection:
+                    cursor = connection.cursor()
+                    initialize_mssql_stock_list(cursor)
+                    cursor.execute("DELETE FROM dbo.StockList")
+                    for sort_order, stock in enumerate(stock_list):
+                        cursor.execute(
+                            "INSERT INTO dbo.StockList (stock_code, sort_order) "
+                            "VALUES (?, ?)",
+                            stock,
+                            sort_order,
+                        )
+        except Exception as error:
+            raise StockListStorageError("無法儲存 MSSQL 股票清單。") from error
+
 
 AI_SYSTEM_PROMPT = (
     "你是專業的台灣股票市場研究助理。請以繁體中文，根據使用者提供的法人持股、融資融券與近30日行情資料，"
@@ -53,8 +177,8 @@ AI_SYSTEM_PROMPT = (
 )
 
 
-def validate_stock_list(raw_stocks):
-    if not isinstance(raw_stocks, list) or not raw_stocks:
+def validate_stock_list(raw_stocks, allow_empty=False):
+    if not isinstance(raw_stocks, list) or (not raw_stocks and not allow_empty):
         return None, "請輸入至少一個股票代號。"
     if len(raw_stocks) > MAX_STOCKS:
         return None, f"一次最多可輸入 {MAX_STOCKS} 檔股票。"
@@ -88,8 +212,12 @@ def run_job(job_id, stock_list):
 
 @app.get("/")
 def index():
-    stock_list = json.loads(stock_list_file.read_text(encoding="utf-8"))
-    return render_template("index.html", stock_list="\n".join(map(str, stock_list)))
+    try:
+        stock_list = read_stock_list()
+    except StockListStorageError:
+        app.logger.exception("載入股票清單失敗")
+        return render_template("storage-error.html"), 503
+    return render_template("index.html", stock_list=stock_list)
 
 
 @app.get("/health")
@@ -97,18 +225,27 @@ def health():
     return jsonify(status="ok")
 
 
+@app.get("/api/stock-list")
+def get_stock_list():
+    try:
+        return jsonify(stocks=read_stock_list())
+    except StockListStorageError as error:
+        app.logger.exception("讀取股票清單失敗")
+        return jsonify(error=str(error)), 503
+
+
 @app.post("/api/stock-list")
 def save_stock_list():
     payload = request.get_json(silent=True) or {}
-    stock_list, error = validate_stock_list(payload.get("stocks"))
+    stock_list, error = validate_stock_list(payload.get("stocks"), allow_empty=True)
     if error:
         return jsonify(error=error), 400
 
-    with stock_list_lock:
-        stock_list_file.write_text(
-            json.dumps(stock_list, indent=2),
-            encoding="utf-8",
-        )
+    try:
+        persist_stock_list(stock_list)
+    except StockListStorageError:
+        app.logger.exception("儲存股票清單失敗")
+        return jsonify(error="無法儲存股票清單，請檢查 MSSQL 連線與資料庫狀態。"), 503
     return jsonify(message="股票清單已儲存。", stocks=stock_list)
 
 

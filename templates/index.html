@@ -52,13 +52,21 @@
     h2 { margin-bottom: 0; font-size: 15px; }
     .count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
     label { display: block; margin-bottom: 8px; font-size: 13px; font-weight: 600; }
-    textarea {
-      display: block; width: 100%; min-height: 250px; resize: vertical;
-      padding: 12px; border: 1px solid var(--line); border-radius: 4px;
-      background: #fbfcf8; color: var(--ink); font: 13px/1.9 ui-monospace, Consolas, monospace;
-      outline: none;
+    .stock-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+    .stock-input {
+      min-width: 0; min-height: 39px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px;
+      background: #fbfcf8; color: var(--ink); font: 13px ui-monospace, Consolas, monospace; outline: none;
     }
-    textarea:focus { border-color: var(--green); box-shadow: 0 0 0 3px var(--soft-green); }
+    .stock-input:focus { border-color: var(--green); box-shadow: 0 0 0 3px var(--soft-green); }
+    .stock-list { display: grid; gap: 6px; min-height: 80px; max-height: 250px; margin: 10px 0 0; padding: 0; overflow: auto; list-style: none; }
+    .stock-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; background: #fbfcf8; font: 13px ui-monospace, Consolas, monospace; }
+    .stock-item[hidden] { display: none; }
+    .delete-stock {
+      flex: 0 0 auto; padding: 3px 7px; border: 1px solid transparent; border-radius: 3px;
+      color: var(--coral); background: transparent; font: 12px "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+    }
+    .delete-stock:hover { border-color: #f0c7bc; background: var(--soft-coral); }
+    .empty-list { padding: 12px 8px; color: var(--muted); text-align: center; font-size: 12px; }
     .hint { margin: 9px 0 17px; color: var(--muted); font-size: 12px; line-height: 1.6; }
     button { font: inherit; cursor: pointer; }
     .run-button {
@@ -69,6 +77,7 @@
     .run-button:disabled { cursor: wait; opacity: .72; }
     .run-icon { font-size: 16px; }
     .form-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .list-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
     .save-button {
       min-height: 43px; border: 1px solid var(--line); border-radius: 4px;
       color: var(--ink); background: white; font-size: 13px; font-weight: 700;
@@ -132,7 +141,7 @@
       .source-note { white-space: normal; }
       .workspace { grid-template-columns: 1fr; gap: 14px; }
       .control-panel { position: static; padding: 17px; }
-      textarea { min-height: 150px; }
+      .stock-list { max-height: 190px; }
       .results-head { align-items: start; flex-direction: column; padding: 14px; }
       .downloads { width: 100%; }
       .download { flex: 1; }
@@ -161,11 +170,18 @@
           <h2>股票清單</h2>
           <span id="stock-count" class="count"></span>
         </div>
-        <label for="stocks">輸入股票代號</label>
-        <textarea id="stocks" name="stocks" spellcheck="false" aria-describedby="list-hint">{{ stock_list }}</textarea>
-        <p id="list-hint" class="hint">每行一檔，也可用逗號分隔。最多 100 檔；儲存後會更新此服務的預設清單。</p>
-        <div class="form-actions">
+        <label for="stock-code">查詢或新增股票代號</label>
+        <div class="stock-entry">
+          <input id="stock-code" class="stock-input" type="search" inputmode="numeric" placeholder="輸入代號查詢；按新增加入清單" aria-describedby="list-hint">
+          <button id="add-button" class="save-button" type="button">新增</button>
+        </div>
+        <ul id="stock-list" class="stock-list" aria-label="股票清單"></ul>
+        <p id="list-hint" class="hint">可輸入多個代號，以空白或逗號分隔；最多 100 檔。新增、刪除後按儲存才會更新預設清單。</p>
+        <div class="list-actions">
+          <button id="load-button" class="save-button" type="button">讀取已儲存清單</button>
           <button id="save-button" class="save-button" type="button">儲存清單</button>
+        </div>
+        <div class="form-actions">
           <button id="run-button" class="run-button" type="submit"><span class="run-icon" aria-hidden="true">↗</span><span>執行查詢</span></button>
         </div>
       </form>
@@ -201,10 +217,13 @@
   </main>
   <script>
     const form = document.querySelector("#query-form");
-    const stockInput = document.querySelector("#stocks");
+    const stockCodeInput = document.querySelector("#stock-code");
+    const stockListView = document.querySelector("#stock-list");
     const countLabel = document.querySelector("#stock-count");
     const runButton = document.querySelector("#run-button");
     const saveButton = document.querySelector("#save-button");
+    const loadButton = document.querySelector("#load-button");
+    const addButton = document.querySelector("#add-button");
     const statusBox = document.querySelector("#status");
     const statusText = document.querySelector("#status-text");
     const institutionView = document.querySelector("#institution-view");
@@ -216,14 +235,34 @@
     const downloadMarginShort = document.querySelector("#download-margin-short");
     const aiProvider = document.querySelector("#ai-provider");
     const analyzeButton = document.querySelector("#analyze-button");
+    let stockList = {{ stock_list|tojson }};
     let resultData = null;
 
-    function parseStocks() {
-      return [...new Set(stockInput.value.split(/[\s,，;；]+/).map(value => value.trim()).filter(Boolean))];
+    function parseStockCodes(value) {
+      return [...new Set(value.split(/[\s,，;；]+/).map(stock => stock.trim()).filter(Boolean))];
     }
 
     function updateCount() {
-      countLabel.textContent = `${parseStocks().length} 檔`;
+      countLabel.textContent = `${stockList.length} 檔`;
+      const query = stockCodeInput.value.trim();
+      stockListView.replaceChildren();
+      const matchingStocks = stockList.filter(stock => stock.includes(query));
+      if (!matchingStocks.length) {
+        const empty = make("li", query ? "沒有符合的股票代號。" : "清單目前沒有股票。", "empty-list");
+        stockListView.append(empty);
+        return;
+      }
+
+      matchingStocks.forEach(stock => {
+        const item = make("li", undefined, "stock-item");
+        item.append(make("span", stock));
+        const removeButton = make("button", "刪除", "delete-stock");
+        removeButton.type = "button";
+        removeButton.dataset.stock = stock;
+        removeButton.setAttribute("aria-label", `刪除股票 ${stock}`);
+        item.append(removeButton);
+        stockListView.append(item);
+      });
     }
 
     function setStatus(message, state = "") {
@@ -341,24 +380,65 @@
       }
     }
 
-    stockInput.addEventListener("input", updateCount);
-    saveButton.addEventListener("click", async () => {
-      const stocks = parseStocks();
-      if (!stocks.length) return setStatus("請先輸入股票代號。", "error");
-      if (stocks.some(stock => !/^\d{1,6}$/.test(stock))) return setStatus("股票代號僅能包含 1 至 6 位數字。", "error");
-      if (stocks.length > 100) return setStatus("最多可儲存 100 檔股票。", "error");
+    function addStocks() {
+      const stocks = parseStockCodes(stockCodeInput.value);
+      if (!stocks.length) return setStatus("請輸入要新增的股票代號。", "error");
+      if (stocks.some(stock => !/^\d{1,6}$/.test(stock))) {
+        return setStatus("股票代號僅能包含 1 至 6 位數字。", "error");
+      }
+      const newStocks = stocks.filter(stock => !stockList.includes(stock));
+      if (stockList.length + newStocks.length > 100) {
+        return setStatus("最多可加入 100 檔股票。", "error");
+      }
+      stockList = [...stockList, ...newStocks];
+      stockCodeInput.value = "";
+      updateCount();
+      setStatus(newStocks.length ? `已新增 ${newStocks.length} 檔股票，請儲存清單以保留變更。` : "輸入的股票代號已在清單中。");
+    }
 
+    addButton.addEventListener("click", addStocks);
+    stockCodeInput.addEventListener("keydown", event => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        addStocks();
+      }
+    });
+    stockCodeInput.addEventListener("input", updateCount);
+    stockListView.addEventListener("click", event => {
+      const button = event.target.closest("button[data-stock]");
+      if (!button) return;
+      stockList = stockList.filter(stock => stock !== button.dataset.stock);
+      updateCount();
+      setStatus(`已刪除股票 ${button.dataset.stock}，請儲存清單以保留變更。`);
+    });
+    loadButton.addEventListener("click", async () => {
+      loadButton.disabled = true;
+      setStatus("正在讀取已儲存的股票清單…", "running");
+      try {
+        const response = await fetch("/api/stock-list");
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "無法讀取股票清單。");
+        stockList = payload.stocks;
+        updateCount();
+        setStatus("已讀取儲存的股票清單。");
+      } catch (error) {
+        setStatus(error.message, "error");
+      } finally {
+        loadButton.disabled = false;
+      }
+    });
+    saveButton.addEventListener("click", async () => {
       saveButton.disabled = true;
       setStatus("正在儲存股票清單…", "running");
       try {
         const response = await fetch("/api/stock-list", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ stocks }),
+          body: JSON.stringify({ stocks: stockList }),
         });
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || "無法儲存股票清單。");
-        stockInput.value = payload.stocks.join("\n");
+        stockList = payload.stocks;
         updateCount();
         setStatus("股票清單已儲存，之後載入頁面時會使用這份清單。Render 需套用持久磁碟設定，才能跨重啟保留。");
       } catch (error) {
@@ -382,7 +462,7 @@
 
     form.addEventListener("submit", async event => {
       event.preventDefault();
-      const stocks = parseStocks();
+      const stocks = stockList;
       if (!stocks.length) return setStatus("請先輸入股票代號。", "error");
       if (stocks.some(stock => !/^\d{1,6}$/.test(stock))) return setStatus("股票代號僅能包含 1 至 6 位數字。", "error");
       if (stocks.length > 100) return setStatus("一次最多可查詢 100 檔股票。", "error");
