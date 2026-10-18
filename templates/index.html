@@ -503,7 +503,7 @@
       setStockListControlsDisabled(true);
       setStatus("正在讀取已儲存的股票清單…", "running");
       try {
-        const response = await fetch("/api/stock-list");
+        const response = await fetch("/api/stock-list", { cache: "no-store" });
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || "無法讀取股票清單。");
         stockList = payload.stocks;

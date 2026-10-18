@@ -1,4 +1,7 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import app as stock_app
@@ -113,15 +116,24 @@ class MarketStockTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("Yahoo Finance 找不到", response.json["error"])
 
-    def test_saving_stock_list_persists_remaining_stocks_after_delete(self):
-        with mock.patch.object(stock_app, "persist_stock_list") as persist:
-            response = self.client.post(
-                "/api/stock-list",
-                json={"stocks": ["2330"]},
-            )
+    def test_deleted_stock_stays_removed_after_loading_saved_list(self):
+        with tempfile.TemporaryDirectory() as temp_directory:
+            stock_list_file = Path(temp_directory) / "stock_list.json"
+            stock_list_file.write_text(json.dumps(["2330", "2317"]), encoding="utf-8")
+            with (
+                mock.patch.object(stock_app, "stock_list_file", stock_list_file),
+                mock.patch.object(stock_app, "connect_mssql", return_value=None),
+            ):
+                delete_response = self.client.post(
+                    "/api/stock-list",
+                    json={"stocks": ["2317"]},
+                )
+                read_response = self.client.get("/api/stock-list")
 
-        self.assertEqual(response.status_code, 200)
-        persist.assert_called_once_with(["2330"])
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertEqual(read_response.status_code, 200)
+        self.assertEqual(read_response.json["stocks"], ["2317"])
+        self.assertEqual(read_response.headers["Cache-Control"], "no-store")
 
 
 if __name__ == "__main__":

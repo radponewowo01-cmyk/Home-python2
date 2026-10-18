@@ -499,7 +499,9 @@ def health():
 @app.get("/api/stock-list")
 def get_stock_list():
     try:
-        return jsonify(stocks=read_stock_list())
+        response = jsonify(stocks=read_stock_list())
+        response.headers["Cache-Control"] = "no-store"
+        return response
     except StockListStorageError as error:
         app.logger.exception("讀取股票清單失敗")
         return jsonify(error=str(error)), 503
