@@ -122,43 +122,35 @@ def parse_dotnet_connection_string(connection_string):
     return settings
 
 
-def _odbc_value(value):
-    return "{" + value.replace("}", "}}") + "}"
-
-
-def to_odbc_connection_string(connection_string):
+def to_pymssql_parameters(connection_string):
     settings = parse_dotnet_connection_string(connection_string)
-    if "driver" in settings:
-        return connection_string
-
     aliases = {
         "server": ("server", "datasource", "address", "addr", "networkaddress"),
         "database": ("database", "initialcatalog"),
         "user": ("uid", "userid", "user", "username"),
         "password": ("pwd", "password"),
     }
-    normalized = {}
+    parameters = {}
     for target, keys in aliases.items():
         value = next((settings[key] for key in keys if key in settings), None)
         if value is None:
             raise ValueError(f"Somee 連線字串缺少必要欄位：{target}")
-        normalized[target] = value
+        parameters[target] = value
 
-    converted = [
-        f"DRIVER={_odbc_value('ODBC Driver 18 for SQL Server')}",
-        f"SERVER={_odbc_value(normalized['server'])}",
-        f"DATABASE={_odbc_value(normalized['database'])}",
-        f"UID={_odbc_value(normalized['user'])}",
-        f"PWD={_odbc_value(normalized['password'])}",
-    ]
-    for key in ("encrypt", "trustservercertificate"):
-        if key in settings:
-            converted.append(f"{key}={_odbc_value(settings[key])}")
-    if "encrypt" not in settings:
-        converted.append("Encrypt=yes")
-    if "trustservercertificate" not in settings:
-        converted.append("TrustServerCertificate=yes")
-    return ";".join(converted)
+    server = parameters["server"]
+    if server.casefold().startswith("tcp:"):
+        server = server[4:]
+    endpoint = re.fullmatch(r"(.+?)[,:](\d+)", server)
+    if endpoint:
+        server, port = endpoint.groups()
+    else:
+        port = settings.get("port", "1433")
+
+    parameters["server"] = server
+    parameters["port"] = port
+    parameters["timeout"] = 10
+    parameters["login_timeout"] = 10
+    return parameters
 
 
 def connect_mssql():
@@ -167,19 +159,19 @@ def connect_mssql():
         return None
 
     try:
-        import pyodbc
+        import pymssql
     except ImportError as error:
         raise StockListStorageError(
-            "MSSQL 模式需要安裝 pyodbc，請依 requirements.txt 安裝相依套件。"
+            "MSSQL 模式需要安裝 pymssql，請依 requirements.txt 安裝相依套件。"
         ) from error
 
     try:
-        odbc_connection_string = to_odbc_connection_string(connection_string)
+        parameters = to_pymssql_parameters(connection_string)
     except ValueError as error:
         raise StockListStorageError(str(error)) from error
 
     try:
-        return pyodbc.connect(odbc_connection_string, timeout=5)
+        return pymssql.connect(**parameters)
     except Exception as error:
         raise StockListStorageError(
             f"無法連線 MSSQL：{format_storage_error(error)}"
@@ -227,9 +219,8 @@ def initialize_mssql_stock_list(cursor):
     ]
     for sort_order, stock in enumerate(seed_stocks):
         cursor.execute(
-            "INSERT INTO dbo.StockList (stock_code, sort_order) VALUES (?, ?)",
-            stock,
-            sort_order,
+            "INSERT INTO dbo.StockList (stock_code, sort_order) VALUES (%s, %s)",
+            (stock, sort_order),
         )
     cursor.execute(
         "INSERT INTO dbo.StockListState (state_id, initialized) VALUES (1, 1)"
@@ -279,9 +270,8 @@ def persist_stock_list(stock_list):
                     for sort_order, stock in enumerate(stock_list):
                         cursor.execute(
                             "INSERT INTO dbo.StockList (stock_code, sort_order) "
-                            "VALUES (?, ?)",
-                            stock,
-                            sort_order,
+                            "VALUES (%s, %s)",
+                            (stock, sort_order),
                         )
         except Exception as error:
             raise StockListStorageError(

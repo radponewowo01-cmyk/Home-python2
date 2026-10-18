@@ -3,4 +3,4 @@ beautifulsoup4
 yfinance
 Flask
 gunicorn
-pyodbc
+pymssql

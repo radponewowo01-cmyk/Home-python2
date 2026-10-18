@@ -12,10 +12,6 @@ Render Persistent Disk 需要付費 Web Service，且掛載磁碟的服務只能
 
 ## 使用 MSSQL 儲存股票清單
 
-設定 `MSSQL_CONNECTION_STRING` 環境變數後，網頁的股票清單讀取及儲存會改用 MSSQL；未設定時仍使用 `STOCK_LIST_FILE` 指定的 JSON 檔案。請將連線字串設在服務的環境變數或 Secret 管理中，不要提交到程式碼或版控。可直接使用 Somee 提供的 .NET 格式（`workstation id`、`data source`、`user id`、`pwd`、`initial catalog`）；應用程式會轉成 ODBC Driver 18 格式。也接受已包含 `Driver=` 的 ODBC 格式，例如：
+設定 `MSSQL_CONNECTION_STRING` 環境變數後，網頁的股票清單讀取及儲存會改用 MSSQL；未設定時仍使用 `STOCK_LIST_FILE` 指定的 JSON 檔案。請將連線字串設在服務的環境變數或 Secret 管理中，不要提交到程式碼或版控。可直接使用 Somee 提供的 .NET 格式（`workstation id`、`data source`、`user id`、`pwd`、`initial catalog`）；應用程式會使用 `pymssql` 解析欄位並連線，不需 ODBC Driver。
 
-```text
-Driver={ODBC Driver 18 for SQL Server};Server=tcp:<host>,1433;Database=<database>;Uid=<user>;Pwd=<password>;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;
-```
-
-Render 部署設定會先安裝 Microsoft ODBC Driver 18 及其 Linux 執行相依套件，再安裝 `requirements.txt` 中的 `pyodbc`。若部署到其他 Linux 主機，需自行安裝相容的 Microsoft SQL Server ODBC Driver。資料庫帳號需有建立資料表及讀寫資料的權限。第一次連線時，應用程式會建立 `dbo.StockList`（股票代號與排序）及 `dbo.StockListState`（初始化標記）；初始化時將 `stock_list.json` 匯入一次。之後資料庫是股票清單的主要來源，清單即使儲存為空也不會在重啟時重新匯入 JSON。
+Render 建置時會從 `requirements.txt` 安裝 `pymssql`；其官方 Linux wheel 包含 FreeTDS，因此不需在 Render 安裝 unixODBC 或 ODBC Driver。Somee 的 `data source` 若包含 `,1434` 等連接埠，程式會自動拆分主機與連接埠。資料庫帳號需有建立資料表及讀寫資料的權限。第一次連線時，應用程式會建立 `dbo.StockList`（股票代號與排序）及 `dbo.StockListState`（初始化標記）；初始化時將 `stock_list.json` 匯入一次。之後資料庫是股票清單的主要來源，清單即使儲存為空也不會在重啟時重新匯入 JSON。
