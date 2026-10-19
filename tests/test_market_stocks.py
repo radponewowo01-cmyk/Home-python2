@@ -116,6 +116,43 @@ class MarketStockTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("Yahoo Finance 找不到", response.json["error"])
 
+    def test_query_uses_saved_list_when_input_is_empty(self):
+        yahoo_matches = [[
+            {"code": "2330", "name": "Taiwan Semiconductor", "market": "上市", "symbol": "2330.TW"},
+            {"code": "2317", "name": "鴻海", "market": "上市", "symbol": "2317.TW"},
+        ]]
+
+        class CapturedThread:
+            def __init__(self, target, args, daemon):
+                self.target = target
+                self.args = args
+                self.daemon = daemon
+
+            def start(self):
+                pass
+
+        executor = mock.MagicMock()
+        executor.__enter__.return_value = executor
+        executor.map.side_effect = lambda function, values: map(function, values)
+
+        with (
+            mock.patch.object(stock_app, "read_stock_list", return_value=["2330", "2317"]),
+            mock.patch.object(stock_app, "search_yahoo_stocks", side_effect=yahoo_matches),
+            mock.patch.object(
+                stock_app,
+                "get_market_stock_list",
+                return_value=[{"code": "2330", "name": "台積電", "market": "上市"}, {"code": "2317", "name": "鴻海", "market": "上市"}],
+            ),
+            mock.patch.object(stock_app, "ThreadPoolExecutor", return_value=executor),
+            mock.patch.object(stock_app.threading, "Thread", CapturedThread),
+        ):
+            response = self.client.post("/api/jobs", json={"stocks": []})
+
+        self.assertEqual(response.status_code, 202)
+        job = stock_app.jobs[next(iter(stock_app.jobs))]
+        self.assertEqual(job["stocks"], ["2330", "2317"])
+        self.assertEqual(job["markets"], {"2330": "上市", "2317": "上市"})
+
     def test_deleted_stock_stays_removed_after_loading_saved_list(self):
         with tempfile.TemporaryDirectory() as temp_directory:
             stock_list_file = Path(temp_directory) / "stock_list.json"

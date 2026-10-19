@@ -547,8 +547,9 @@
 
     form.addEventListener("submit", async event => {
       event.preventDefault();
-      const stocks = parseStockCodes(stockCodeInput.value);
-      if (!stocks.length) return setStatus("請先輸入股票代號。", "error");
+      const inputStocks = parseStockCodes(stockCodeInput.value);
+      const stocks = inputStocks.length ? inputStocks : stockList.slice();
+      if (!stocks.length) return setStatus("目前沒有可查詢的股票，請先新增或儲存股票清單。", "error");
       if (stocks.some(stock => !/^\d{1,6}$/.test(stock))) return setStatus("股票代號僅能包含 1 至 6 位數字。", "error");
       if (stocks.length > 100) return setStatus("一次最多可查詢 100 檔股票。", "error");
 

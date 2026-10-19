@@ -540,9 +540,20 @@ def save_stock_list():
 @app.post("/api/jobs")
 def create_job():
     payload = request.get_json(silent=True) or {}
-    stock_list, error = validate_stock_list(payload.get("stocks"))
-    if error:
-        return jsonify(error=error), 400
+    requested_stocks = payload.get("stocks")
+    if requested_stocks in (None, []) or (isinstance(requested_stocks, list) and not requested_stocks):
+        try:
+            stock_list = read_stock_list()
+        except StockListStorageError as error:
+            app.logger.exception("讀取儲存的股票清單失敗")
+            return jsonify(error=str(error)), 503
+    else:
+        stock_list, error = validate_stock_list(requested_stocks)
+        if error:
+            return jsonify(error=error), 400
+
+    if not stock_list:
+        return jsonify(error="目前沒有可查詢的股票，請先新增或儲存股票清單。"), 400
 
     try:
         with ThreadPoolExecutor(max_workers=min(len(stock_list), 10)) as executor:
