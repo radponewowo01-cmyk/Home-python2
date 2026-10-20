@@ -110,11 +110,74 @@ class MarketStockTests(unittest.TestCase):
         self.assertEqual(job["markets"], {"2330": "上市"})
 
     def test_query_rejects_code_outside_official_markets(self):
-        with mock.patch.object(stock_app, "search_yahoo_stocks", return_value=[]):
-            response = self.client.post("/api/jobs", json={"stocks": ["9999"]})
+        with tempfile.TemporaryDirectory() as temp_directory:
+            stock_list_file = Path(temp_directory) / "stock_list.json"
+            stock_list_file.write_text(json.dumps(["9999", "2330"]), encoding="utf-8")
+            with (
+                mock.patch.object(stock_app, "stock_list_file", stock_list_file),
+                mock.patch.object(stock_app, "connect_mssql", return_value=None),
+                mock.patch.object(stock_app, "search_yahoo_stocks", return_value=[]),
+            ):
+                response = self.client.post("/api/jobs", json={"stocks": ["9999"]})
+                saved_stocks = json.loads(stock_list_file.read_text(encoding="utf-8"))
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("Yahoo Finance 找不到", response.json["error"])
+        self.assertEqual(response.json["unknown_stocks"], ["9999"])
+        self.assertEqual(response.json["removed_stocks"], ["9999"])
+        self.assertEqual(saved_stocks, ["2330"])
+
+    def test_query_removes_unknown_stock_and_runs_remaining_codes(self):
+        class CapturedThread:
+            def __init__(self, target, args, daemon):
+                self.target = target
+                self.args = args
+                self.daemon = daemon
+
+            def start(self):
+                pass
+
+        executor = mock.MagicMock()
+        executor.__enter__.return_value = executor
+        executor.map.side_effect = lambda function, values: map(function, values)
+        valid_match = {
+            "code": "2330",
+            "name": "Taiwan Semiconductor",
+            "market": "上市",
+            "symbol": "2330.TW",
+        }
+
+        with tempfile.TemporaryDirectory() as temp_directory:
+            stock_list_file = Path(temp_directory) / "stock_list.json"
+            stock_list_file.write_text(json.dumps(["9999", "2330"]), encoding="utf-8")
+            with (
+                mock.patch.object(stock_app, "stock_list_file", stock_list_file),
+                mock.patch.object(stock_app, "connect_mssql", return_value=None),
+                mock.patch.object(
+                    stock_app,
+                    "search_yahoo_stocks",
+                    side_effect=[[], [valid_match]],
+                ),
+                mock.patch.object(
+                    stock_app,
+                    "get_market_stock_list",
+                    return_value=[{"code": "2330", "name": "台積電", "market": "上市"}],
+                ),
+                mock.patch.object(stock_app, "ThreadPoolExecutor", return_value=executor),
+                mock.patch.object(stock_app.threading, "Thread", CapturedThread),
+            ):
+                response = self.client.post(
+                    "/api/jobs",
+                    json={"stocks": ["9999", "2330"]},
+                )
+                saved_stocks = json.loads(stock_list_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json["unknown_stocks"], ["9999"])
+        self.assertEqual(response.json["removed_stocks"], ["9999"])
+        self.assertEqual(saved_stocks, ["2330"])
+        job = stock_app.jobs[response.json["job_id"]]
+        self.assertEqual(job["stocks"], ["2330"])
 
     def test_query_uses_saved_list_when_input_is_empty(self):
         yahoo_matches = [[

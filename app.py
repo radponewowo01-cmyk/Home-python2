@@ -47,7 +47,7 @@ MARKET_STOCK_SOURCES = {
 }
 default_stock_list_file = Path(__file__).with_name("stock_list.json")
 stock_list_file = Path(os.environ.get("STOCK_LIST_FILE", default_stock_list_file))
-stock_list_lock = threading.Lock()
+stock_list_lock = threading.RLock()
 market_stock_cache = {"expires_at": 0, "stocks": []}
 market_stock_cache_lock = threading.Lock()
 
@@ -306,6 +306,16 @@ def persist_stock_list(stock_list):
             raise StockListStorageError(
                 f"無法儲存 MSSQL 股票清單：{format_storage_error(error)}"
             ) from error
+
+
+def remove_stocks_from_saved_list(stocks):
+    with stock_list_lock:
+        saved_stocks = read_stock_list()
+        remaining_stocks = [stock for stock in saved_stocks if stock not in stocks]
+        removed_stocks = [stock for stock in saved_stocks if stock in stocks]
+        if removed_stocks:
+            persist_stock_list(remaining_stocks)
+        return removed_stocks
 
 
 AI_SYSTEM_PROMPT = (
@@ -567,10 +577,20 @@ def create_job():
         for stock in matches
     }
     unknown_stocks = [stock for stock in stock_list if stock not in valid_codes]
+    removed_stocks = []
     if unknown_stocks:
-        return jsonify(
-            error=f"Yahoo Finance 找不到以下台灣股票代號：{', '.join(unknown_stocks)}"
-        ), 400
+        try:
+            removed_stocks = remove_stocks_from_saved_list(unknown_stocks)
+        except StockListStorageError as error:
+            app.logger.exception("自動移除查無股票代號失敗")
+            return jsonify(error=f"查無股票代號，且無法更新已儲存清單：{error}"), 503
+        stock_list = [stock for stock in stock_list if stock in valid_codes]
+        if not stock_list:
+            return jsonify(
+                error=f"Yahoo Finance 找不到以下台灣股票代號：{', '.join(unknown_stocks)}",
+                unknown_stocks=unknown_stocks,
+                removed_stocks=removed_stocks,
+            ), 400
 
     yahoo_stocks = refine_stock_market_labels([
         stock
@@ -586,7 +606,11 @@ def create_job():
     with jobs_lock:
         active = any(job["status"] in ("queued", "running") for job in jobs.values())
         if active:
-            return jsonify(error="目前已有查詢工作進行中，請稍後再試。"), 409
+            return jsonify(
+                error="目前已有查詢工作進行中，請稍後再試。",
+                unknown_stocks=unknown_stocks,
+                removed_stocks=removed_stocks,
+            ), 409
         job_id = uuid.uuid4().hex
         jobs[job_id] = {"status": "queued", "stocks": stock_list, "markets": markets}
         while len(jobs) > MAX_SAVED_JOBS:
@@ -597,7 +621,11 @@ def create_job():
         args=(job_id, stock_list, markets),
         daemon=True,
     ).start()
-    return jsonify(job_id=job_id), 202
+    return jsonify(
+        job_id=job_id,
+        unknown_stocks=unknown_stocks,
+        removed_stocks=removed_stocks,
+    ), 202
 
 
 @app.get("/api/jobs/<job_id>")

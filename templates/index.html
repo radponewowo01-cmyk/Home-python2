@@ -580,7 +580,24 @@
           body: JSON.stringify({ stocks }),
         });
         const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || "無法開始查詢。");
+        const unknownStocks = payload.unknown_stocks || [];
+        let unavailableMessage = "";
+        if (unknownStocks.length) {
+          const listChanged = unknownStocks.some(stock =>
+            stockList.includes(stock) || savedStockList.includes(stock)
+          );
+          stockList = stockList.filter(stock => !unknownStocks.includes(stock));
+          savedStockList = savedStockList.filter(stock => !unknownStocks.includes(stock));
+          updateCount();
+          unavailableMessage = listChanged
+            ? `查無代號 ${unknownStocks.join("、")}，已從清單移除。`
+            : `查無代號 ${unknownStocks.join("、")}；該代號原本不在清單中。`;
+        }
+        if (!response.ok) {
+          const errorMessage = payload.error || "無法開始查詢。";
+          setStatus(`${errorMessage}${unavailableMessage ? ` ${unavailableMessage}` : ""}`, "error");
+          return;
+        }
         const job = await pollJob(payload.job_id);
         resultData = job;
         renderInstitution(job.institution_data, job.markets);
@@ -591,7 +608,7 @@
         downloadMarginShort.disabled = false;
         analyzeButton.disabled = false;
         analysisView.replaceChildren(make("div", "完成查詢後，可根據目前資料產生 AI 分析。", "empty"));
-        setStatus(`「${source}」查詢完成（${stocks.length} 檔）。結果僅暫存在目前服務執行個體，下載後請自行保存。`);
+        setStatus(`「${source}」查詢完成（${job.stocks.length} 檔）。${unavailableMessage ? `${unavailableMessage} ` : ""}結果僅暫存在目前服務執行個體，下載後請自行保存。`);
       } catch (error) {
         setStatus(error.message, "error");
       } finally {
