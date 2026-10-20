@@ -14,6 +14,7 @@ HEADERS = {
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0 Safari/537.36",
     "Referer": "https://fubon-ebrokerdj.fbs.com.tw/",
 }
+MAX_CONCURRENT_STOCK_FETCHES = 3
 
 
 def to_yahoo_symbols(stock_code):
@@ -180,7 +181,9 @@ def fetch_stock_data(stock_list, progress_callback=None):
     institution_data = {}
     price_data = {}
     margin_short_data = {}
-    with ThreadPoolExecutor(max_workers=min(len(stock_list), 10)) as executor:
+    with ThreadPoolExecutor(
+        max_workers=min(len(stock_list), MAX_CONCURRENT_STOCK_FETCHES)
+    ) as executor:
         futures = {
             executor.submit(fetch_one_stock, stock): stock
             for stock in stock_list

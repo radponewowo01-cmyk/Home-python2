@@ -1,6 +1,5 @@
 import json
 import tempfile
-import threading
 import unittest
 from concurrent.futures import Future
 from contextlib import nullcontext
@@ -171,15 +170,24 @@ class MarketStockTests(unittest.TestCase):
         self.assertEqual(job["status"], "queued")
         self.assertEqual(job["stage"], "validating")
 
-    def test_stock_data_fetch_runs_in_parallel_and_reports_progress(self):
-        barrier = threading.Barrier(3)
+    def test_stock_data_fetch_caps_parallelism_and_reports_progress(self):
+        executor_limits = []
+        real_executor = tw_stock.ThreadPoolExecutor
 
         def fetch_category(stock_list, category):
-            barrier.wait(timeout=2)
             return {stock: category for stock in stock_list}
+
+        def create_executor(max_workers):
+            executor_limits.append(max_workers)
+            return real_executor(max_workers=max_workers)
 
         progress = []
         with (
+            mock.patch.object(
+                tw_stock,
+                "ThreadPoolExecutor",
+                side_effect=create_executor,
+            ),
             mock.patch.object(
                 tw_stock,
                 "fetch_institution_data",
@@ -197,16 +205,18 @@ class MarketStockTests(unittest.TestCase):
             ),
         ):
             institution, prices, margin = tw_stock.fetch_stock_data(
-                ["2330", "2317", "2308"],
+                ["2330", "2317", "2308", "2454", "2881"],
                 progress_callback=lambda completed, total: progress.append(
                     (completed, total)
                 ),
             )
 
-        self.assertEqual(list(institution), ["2330", "2317", "2308"])
-        self.assertEqual(list(prices), ["2330", "2317", "2308"])
-        self.assertEqual(list(margin), ["2330", "2317", "2308"])
-        self.assertEqual(sorted(progress), [(1, 3), (2, 3), (3, 3)])
+        expected_stocks = ["2330", "2317", "2308", "2454", "2881"]
+        self.assertEqual(list(institution), expected_stocks)
+        self.assertEqual(list(prices), expected_stocks)
+        self.assertEqual(list(margin), expected_stocks)
+        self.assertEqual(sorted(progress), [(index, 5) for index in range(1, 6)])
+        self.assertEqual(executor_limits, [3])
 
     def test_query_rejects_code_outside_official_markets(self):
         class CapturedThread:
