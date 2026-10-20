@@ -79,6 +79,12 @@
     }
     .run-button:hover:not(:disabled) { background: var(--green-dark); }
     .run-button:disabled { cursor: wait; opacity: .72; }
+    .run-list-button {
+      width: 100%; min-height: 39px; border: 1px solid var(--line); border-radius: 4px;
+      color: var(--green-dark); background: white; font-size: 13px; font-weight: 700;
+    }
+    .run-list-button:hover:not(:disabled) { border-color: var(--green); background: var(--soft-green); }
+    .run-list-button:disabled { cursor: not-allowed; opacity: .5; }
     .run-icon { font-size: 16px; }
     .form-actions { display: grid; grid-template-columns: 1fr; gap: 8px; }
     .list-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
@@ -174,23 +180,25 @@
         <div class="section-title">
           <h2>股票查詢</h2>
         </div>
-        <label for="stock-code">查詢或新增股票代號</label>
+        <label for="stock-code">輸入代號查詢，或搜尋股票名稱</label>
         <div class="stock-entry">
-          <input id="stock-code" class="stock-input" type="search" placeholder="輸入代號或名稱，例如 2330" aria-describedby="list-hint">
-          <button id="add-button" class="save-button" type="button">新增</button>
+          <input id="stock-code" class="stock-input" type="search" placeholder="代號或名稱，例如 2330、台積電" aria-describedby="input-hint">
+          <button id="add-button" class="save-button" type="button">加入清單</button>
         </div>
         <h3 class="subsection-title">Yahoo Finance 搜尋 <span class="count">台灣股票</span></h3>
         <ul id="market-stock-list" class="market-stock-list" aria-label="Yahoo Finance 股票搜尋結果"></ul>
-        <p id="market-stock-hint" class="hint" aria-live="polite"></p>
+        <p id="market-stock-hint" class="hint" aria-live="polite">輸入代號或名稱後，選擇搜尋結果即可帶入代號。</p>
+        <p id="input-hint" class="sr-only">輸入代號可直接查詢；輸入名稱可搜尋並選擇股票。多個代號請以空格或逗號分隔。</p>
         <h3 class="subsection-title">我的清單 <span id="stock-count" class="count"></span></h3>
         <ul id="stock-list" class="stock-list" aria-label="股票清單"></ul>
-        <p id="list-hint" class="hint">輸入 Yahoo Finance 支援的台灣股票代號即可直接查詢，不必先加入我的清單。新增後按「儲存清單」保留變更；刪除會立即儲存。最多 100 檔。</p>
+        <p id="list-hint" class="hint">加入或刪除只會修改目前清單，按「儲存清單」才會保留；讀取會載入已儲存版本。執行輸入不必加入清單，執行清單則使用目前畫面上的項目。最多 100 檔。</p>
         <div class="list-actions">
-          <button id="load-button" class="save-button" type="button">讀取已儲存清單</button>
+          <button id="load-button" class="save-button" type="button">讀取已儲存</button>
           <button id="save-button" class="save-button" type="button">儲存清單</button>
         </div>
         <div class="form-actions">
-          <button id="run-button" class="run-button" type="submit"><span class="run-icon" aria-hidden="true">↗</span><span>執行查詢</span></button>
+          <button id="run-button" class="run-button" type="submit"><span class="run-icon" aria-hidden="true">↗</span><span>執行輸入</span></button>
+          <button id="run-list-button" class="run-list-button" type="button">執行清單</button>
         </div>
       </form>
       <section class="results-panel" aria-label="查詢結果">
@@ -231,6 +239,7 @@
     const marketStockHint = document.querySelector("#market-stock-hint");
     const countLabel = document.querySelector("#stock-count");
     const runButton = document.querySelector("#run-button");
+    const runListButton = document.querySelector("#run-list-button");
     const saveButton = document.querySelector("#save-button");
     const loadButton = document.querySelector("#load-button");
     const addButton = document.querySelector("#add-button");
@@ -250,32 +259,40 @@
     let marketSearchTimer = null;
     let marketSearchSequence = 0;
     let stockListBusy = false;
+    let queryBusy = false;
+    let savedStockList = [...stockList];
+    let stockListDirty = false;
 
     function parseStockCodes(value) {
       return [...new Set(value.split(/[\s,，;；]+/).map(stock => stock.trim()).filter(Boolean))];
     }
 
     function updateCount() {
-      countLabel.textContent = `${stockList.length} 檔`;
+      stockListDirty = JSON.stringify(stockList) !== JSON.stringify(savedStockList);
+      countLabel.textContent = `${stockList.length} 檔${stockListDirty ? " · 未儲存" : ""}`;
       const query = stockCodeInput.value.trim();
       searchMarketStocks(query);
       stockListView.replaceChildren();
-      const matchingStocks = stockList.filter(stock => stock.includes(query));
-      if (!matchingStocks.length) {
-        const empty = make("li", query ? "沒有符合的股票代號。" : "清單目前沒有股票。", "empty-list");
+      if (!stockList.length) {
+        const empty = make("li", "清單目前沒有股票。", "empty-list");
         stockListView.append(empty);
-        return;
+      } else {
+        stockList.forEach(stock => {
+          const item = make("li", undefined, "stock-item");
+          item.append(make("span", stock));
+          const removeButton = make("button", "刪除", "delete-stock");
+          removeButton.type = "button";
+          removeButton.dataset.stock = stock;
+          removeButton.setAttribute("aria-label", `從清單刪除股票 ${stock}`);
+          item.append(removeButton);
+          stockListView.append(item);
+        });
       }
-
-      matchingStocks.forEach(stock => {
-        const item = make("li", undefined, "stock-item");
-        item.append(make("span", stock));
-        const removeButton = make("button", "刪除", "delete-stock");
-        removeButton.type = "button";
-        removeButton.dataset.stock = stock;
-        removeButton.setAttribute("aria-label", `刪除股票 ${stock}`);
-        item.append(removeButton);
-        stockListView.append(item);
+      saveButton.disabled = stockListBusy || !stockListDirty;
+      runListButton.disabled = queryBusy || stockList.length === 0;
+      runListButton.textContent = `執行清單（${stockList.length}）`;
+      stockListView.querySelectorAll("button").forEach(button => {
+        button.disabled = stockListBusy;
       });
     }
 
@@ -284,7 +301,10 @@
       const sequence = ++marketSearchSequence;
       marketStockListView.replaceChildren();
       marketStockHint.textContent = "";
-      if (!query) return;
+      if (!query) {
+        marketStockHint.textContent = "輸入代號或名稱後，選擇搜尋結果即可帶入代號。";
+        return;
+      }
 
       marketStockHint.textContent = "正在搜尋 Yahoo Finance…";
       marketSearchTimer = window.setTimeout(async () => {
@@ -297,7 +317,7 @@
             marketStockHint.textContent = "Yahoo Finance 找不到符合的台灣上市／櫃股票。";
             return;
           }
-          marketStockHint.textContent = `找到 ${payload.stocks.length} 檔，選取後可直接查詢。`;
+          marketStockHint.textContent = `找到 ${payload.stocks.length} 檔，選取後可執行輸入或加入清單。`;
           payload.stocks.forEach(stock => {
             const item = make("li");
             const button = make("button", `${stock.code}　${stock.name}　${stock.market}`, "market-stock-option");
@@ -324,10 +344,16 @@
       stockCodeInput.disabled = disabled;
       addButton.disabled = disabled;
       loadButton.disabled = disabled;
-      saveButton.disabled = disabled;
+      saveButton.disabled = disabled || !stockListDirty;
       stockListView.querySelectorAll("button").forEach(button => {
         button.disabled = disabled;
       });
+    }
+
+    function setQueryControlsDisabled(disabled) {
+      queryBusy = disabled;
+      runButton.disabled = disabled;
+      runListButton.disabled = disabled || stockList.length === 0;
     }
 
     async function persistStockList(stocks) {
@@ -464,7 +490,7 @@
       stockList = [...stockList, ...newStocks];
       stockCodeInput.value = "";
       updateCount();
-      setStatus(newStocks.length ? `已新增 ${newStocks.length} 檔股票，請儲存清單以保留變更。` : "輸入的股票代號已在清單中。");
+      setStatus(newStocks.length ? `已加入 ${newStocks.length} 檔至目前清單；按「儲存清單」保留變更。` : "輸入的股票代號已在清單中。");
     }
 
     addButton.addEventListener("click", addStocks);
@@ -476,29 +502,16 @@
       stockCodeInput.focus();
     });
     stockCodeInput.addEventListener("input", updateCount);
-    stockListView.addEventListener("click", async event => {
+    stockListView.addEventListener("click", event => {
       const button = event.target.closest("button[data-stock]");
       if (!button || stockListBusy) return;
-      const previousStockList = stockList;
-      stockListBusy = true;
       stockList = stockList.filter(stock => stock !== button.dataset.stock);
       updateCount();
-      setStockListControlsDisabled(true);
-      setStatus(`正在刪除股票 ${button.dataset.stock} 並儲存清單…`, "running");
-      try {
-        stockList = await persistStockList(stockList);
-        setStatus(`已刪除股票 ${button.dataset.stock}，清單已儲存。`);
-      } catch (error) {
-        stockList = previousStockList;
-        setStatus(`刪除未完成：${error.message}`, "error");
-      } finally {
-        stockListBusy = false;
-        updateCount();
-        setStockListControlsDisabled(false);
-      }
+      setStatus(`已從目前清單刪除 ${button.dataset.stock}；按「儲存清單」保留變更。`);
     });
     loadButton.addEventListener("click", async () => {
       if (stockListBusy) return;
+      if (stockListDirty && !window.confirm("目前清單有尚未儲存的變更。讀取已儲存清單會捨棄這些變更，是否繼續？")) return;
       stockListBusy = true;
       setStockListControlsDisabled(true);
       setStatus("正在讀取已儲存的股票清單…", "running");
@@ -507,6 +520,7 @@
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || "無法讀取股票清單。");
         stockList = payload.stocks;
+        savedStockList = [...payload.stocks];
         updateCount();
         setStatus("已讀取儲存的股票清單。");
       } catch (error) {
@@ -523,8 +537,9 @@
       setStatus("正在儲存股票清單…", "running");
       try {
         stockList = await persistStockList(stockList);
+        savedStockList = [...stockList];
         updateCount();
-        setStatus("股票清單已儲存，之後載入頁面時會使用這份清單。Render 需套用持久磁碟設定，才能跨重啟保留。");
+        setStatus("目前清單已儲存，之後載入頁面時會使用這份清單。");
       } catch (error) {
         setStatus(error.message, "error");
       } finally {
@@ -545,21 +560,19 @@
       });
     }));
 
-    form.addEventListener("submit", async event => {
-      event.preventDefault();
-      const inputStocks = parseStockCodes(stockCodeInput.value);
-      const stocks = inputStocks.length ? inputStocks : stockList.slice();
-      if (!stocks.length) return setStatus("目前沒有可查詢的股票，請先新增或儲存股票清單。", "error");
+    async function runStocks(stocks, source) {
+      if (queryBusy) return;
+      if (!stocks.length) return setStatus(source === "清單" ? "目前清單沒有股票可執行。" : "請先輸入股票代號。", "error");
       if (stocks.some(stock => !/^\d{1,6}$/.test(stock))) return setStatus("股票代號僅能包含 1 至 6 位數字。", "error");
       if (stocks.length > 100) return setStatus("一次最多可查詢 100 檔股票。", "error");
 
-      runButton.disabled = true;
+      setQueryControlsDisabled(true);
       downloadInstitution.disabled = true;
       downloadPrices.disabled = true;
       downloadMarginShort.disabled = true;
       analyzeButton.disabled = true;
       resultData = null;
-      setStatus("正在建立查詢工作…", "running");
+      setStatus(`正在建立「${source}」查詢工作…`, "running");
       try {
         const response = await fetch("/api/jobs", {
           method: "POST",
@@ -578,18 +591,24 @@
         downloadMarginShort.disabled = false;
         analyzeButton.disabled = false;
         analysisView.replaceChildren(make("div", "完成查詢後，可根據目前資料產生 AI 分析。", "empty"));
-        setStatus("查詢完成。結果僅暫存在目前服務執行個體，下載後請自行保存。");
+        setStatus(`「${source}」查詢完成（${stocks.length} 檔）。結果僅暫存在目前服務執行個體，下載後請自行保存。`);
       } catch (error) {
         setStatus(error.message, "error");
       } finally {
-        runButton.disabled = false;
+        setQueryControlsDisabled(false);
       }
+    }
+
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      runStocks(parseStockCodes(stockCodeInput.value), "輸入");
     });
+    runListButton.addEventListener("click", () => runStocks([...stockList], "清單"));
 
     analyzeButton.addEventListener("click", async () => {
       if (!resultData) return;
       analyzeButton.disabled = true;
-      runButton.disabled = true;
+      setQueryControlsDisabled(true);
       analyzeButton.textContent = "分析中…";
       analysisView.replaceChildren(make("p", "AI 正在整理法人動向與近期行情…", "summary"));
       setStatus("正在送出查詢資料進行 AI 分析…", "running");
@@ -617,7 +636,7 @@
         setStatus(error.message, "error");
       } finally {
         analyzeButton.disabled = false;
-        runButton.disabled = false;
+        setQueryControlsDisabled(false);
         analyzeButton.textContent = "開始分析";
       }
     });
