@@ -356,6 +356,19 @@
       runListButton.disabled = disabled || stockList.length === 0;
     }
 
+    function removeUnavailableStocks(stocks) {
+      if (!stocks.length) return "";
+      const listChanged = stocks.some(stock =>
+        stockList.includes(stock) || savedStockList.includes(stock)
+      );
+      stockList = stockList.filter(stock => !stocks.includes(stock));
+      savedStockList = savedStockList.filter(stock => !stocks.includes(stock));
+      updateCount();
+      return listChanged
+        ? `查無代號 ${stocks.join("、")}，已從清單移除。`
+        : `查無代號 ${stocks.join("、")}；該代號原本不在清單中。`;
+    }
+
     async function persistStockList(stocks) {
       const response = await fetch("/api/stock-list", {
         method: "POST",
@@ -470,9 +483,14 @@
         const response = await fetch(`/api/jobs/${jobId}`);
         const job = await response.json();
         if (!response.ok) throw new Error(job.error || "無法讀取查詢狀態。");
-        if (job.status === "completed") return job;
-        if (job.status === "failed") throw new Error(job.error || "查詢失敗。");
-        setStatus(job.status === "queued" ? "查詢工作排入佇列…" : "正在抓取資料，請稍候…", "running");
+        if (job.status === "completed" || job.status === "failed") return job;
+        if (job.status === "queued") {
+          setStatus("查詢工作排入佇列…", "running");
+        } else if (job.stage === "validating") {
+          setStatus(`正在驗證股票代號，已完成 ${job.progress.completed}/${job.progress.total} 檔…`, "running");
+        } else {
+          setStatus(`正在抓取資料，已完成 ${job.progress.completed}/${job.progress.total} 檔…`, "running");
+        }
       }
     }
 
@@ -572,7 +590,7 @@
       downloadMarginShort.disabled = true;
       analyzeButton.disabled = true;
       resultData = null;
-      setStatus(`正在建立「${source}」查詢工作…`, "running");
+      setStatus(`正在送出「${source}」查詢工作…`, "running");
       try {
         const response = await fetch("/api/jobs", {
           method: "POST",
@@ -580,25 +598,16 @@
           body: JSON.stringify({ stocks }),
         });
         const payload = await response.json();
-        const unknownStocks = payload.unknown_stocks || [];
-        let unavailableMessage = "";
-        if (unknownStocks.length) {
-          const listChanged = unknownStocks.some(stock =>
-            stockList.includes(stock) || savedStockList.includes(stock)
-          );
-          stockList = stockList.filter(stock => !unknownStocks.includes(stock));
-          savedStockList = savedStockList.filter(stock => !unknownStocks.includes(stock));
-          updateCount();
-          unavailableMessage = listChanged
-            ? `查無代號 ${unknownStocks.join("、")}，已從清單移除。`
-            : `查無代號 ${unknownStocks.join("、")}；該代號原本不在清單中。`;
-        }
         if (!response.ok) {
-          const errorMessage = payload.error || "無法開始查詢。";
-          setStatus(`${errorMessage}${unavailableMessage ? ` ${unavailableMessage}` : ""}`, "error");
+          setStatus(payload.error || "無法開始查詢。", "error");
           return;
         }
         const job = await pollJob(payload.job_id);
+        const unavailableMessage = removeUnavailableStocks(job.unknown_stocks || []);
+        if (job.status === "failed") {
+          setStatus(`${job.error || "查詢失敗。"}${unavailableMessage ? ` ${unavailableMessage}` : ""}`, "error");
+          return;
+        }
         resultData = job;
         renderInstitution(job.institution_data, job.markets);
         renderPrices(job.price_data, job.markets);

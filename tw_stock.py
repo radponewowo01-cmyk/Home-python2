@@ -1,5 +1,6 @@
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
 
@@ -164,11 +165,38 @@ def fetch_price_data(stock_list):
     return all_price_data
 
 
-def fetch_stock_data(stock_list):
+def fetch_stock_data(stock_list, progress_callback=None):
+    if not stock_list:
+        return {}, {}, {}
+
+    def fetch_one_stock(stock):
+        return (
+            stock,
+            fetch_institution_data([stock])[stock],
+            fetch_price_data([stock])[stock],
+            fetch_margin_short_data([stock])[stock],
+        )
+
+    institution_data = {}
+    price_data = {}
+    margin_short_data = {}
+    with ThreadPoolExecutor(max_workers=min(len(stock_list), 10)) as executor:
+        futures = {
+            executor.submit(fetch_one_stock, stock): stock
+            for stock in stock_list
+        }
+        for completed, future in enumerate(as_completed(futures), start=1):
+            stock, institution, prices, margin_short = future.result()
+            institution_data[stock] = institution
+            price_data[stock] = prices
+            margin_short_data[stock] = margin_short
+            if progress_callback:
+                progress_callback(completed, len(stock_list))
+
     return (
-        fetch_institution_data(stock_list),
-        fetch_price_data(stock_list),
-        fetch_margin_short_data(stock_list),
+        {stock: institution_data[stock] for stock in stock_list},
+        {stock: price_data[stock] for stock in stock_list},
+        {stock: margin_short_data[stock] for stock in stock_list},
     )
 
 

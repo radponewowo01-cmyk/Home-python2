@@ -5,7 +5,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import closing
 from pathlib import Path
 
@@ -400,6 +400,11 @@ def get_market_stock_list():
         return stocks
 
 
+def to_official_yahoo_stock(stock):
+    suffix = "TW" if stock["market"] == "上市" else "TWO"
+    return {**stock, "symbol": f"{stock['code']}.{suffix}"}
+
+
 def search_yahoo_stocks(query):
     queries = (
         [f"{query}.TW", f"{query}.TWO"]
@@ -470,11 +475,130 @@ def refine_stock_market_labels(stocks):
     return stocks
 
 
-def run_job(job_id, stock_list, markets):
+def run_job(job_id, stock_list):
     with jobs_lock:
-        jobs[job_id]["status"] = "running"
+        jobs[job_id].update({
+            "status": "running",
+            "stage": "validating",
+            "progress": {"completed": 0, "total": len(stock_list)},
+        })
+
+    def update_progress(completed, total):
+        with jobs_lock:
+            job = jobs.get(job_id)
+            if job:
+                job["progress"] = {"completed": completed, "total": total}
+
     try:
-        institution_data, price_data, margin_short_data = fetch_stock_data(stock_list)
+        yahoo_error = None
+        try:
+            with ThreadPoolExecutor(max_workers=min(len(stock_list), 10)) as executor:
+                futures = {
+                    executor.submit(search_yahoo_stocks, stock): index
+                    for index, stock in enumerate(stock_list)
+                }
+                yahoo_matches = [None] * len(stock_list)
+                for completed, future in enumerate(as_completed(futures), start=1):
+                    yahoo_matches[futures[future]] = future.result()
+                    update_progress(completed, len(stock_list))
+        except (requests.RequestException, ValueError) as error:
+            yahoo_error = error
+            yahoo_matches = [[] for _ in stock_list]
+            app.logger.warning(
+                "查詢工作 %s 搜尋 Yahoo Finance 失敗，改用官方名單確認：%s",
+                job_id,
+                error,
+            )
+
+        valid_codes = {
+            stock["code"]
+            for matches in yahoo_matches
+            for stock in matches
+        }
+        needs_official_lookup = yahoo_error is not None or any(
+            stock not in valid_codes for stock in stock_list
+        )
+        official_stocks = []
+        if needs_official_lookup:
+            try:
+                official_stocks = get_market_stock_list()
+            except (requests.RequestException, ValueError) as error:
+                app.logger.warning(
+                    "查詢工作 %s 無法取得官方股票名單：%s",
+                    job_id,
+                    error,
+                )
+                with jobs_lock:
+                    jobs[job_id].update({
+                        "status": "failed",
+                        "error": (
+                            "Yahoo Finance 暫時無法確認股票代號，"
+                            "而且無法讀取官方名單。請稍後再試；"
+                            "已儲存清單未變更。"
+                        ),
+                    })
+                return
+
+        official_by_code = {
+            stock["code"]: stock
+            for stock in official_stocks
+        }
+        for index, stock in enumerate(stock_list):
+            if stock in valid_codes or stock not in official_by_code:
+                continue
+            official = official_by_code[stock]
+            yahoo_matches[index].append(to_official_yahoo_stock(official))
+            valid_codes.add(stock)
+
+        unknown_stocks = [
+            stock for stock in stock_list if stock not in valid_codes
+        ]
+        removed_stocks = []
+        if unknown_stocks:
+            removed_stocks = remove_stocks_from_saved_list(unknown_stocks)
+            app.logger.info(
+                "查詢工作 %s 自動移除查無代號：%s",
+                job_id,
+                ", ".join(removed_stocks),
+            )
+            stock_list = [stock for stock in stock_list if stock in valid_codes]
+        if not stock_list:
+            with jobs_lock:
+                jobs[job_id].update({
+                    "status": "failed",
+                    "error": (
+                        "官方股票名單與 Yahoo Finance 都找不到以下台灣股票代號："
+                        f"{', '.join(unknown_stocks)}"
+                    ),
+                    "unknown_stocks": unknown_stocks,
+                    "removed_stocks": removed_stocks,
+                })
+            return
+
+        yahoo_stocks = refine_stock_market_labels([
+            stock
+            for matches in yahoo_matches
+            for stock in matches
+            if stock["code"] in stock_list
+        ])
+        markets = {
+            stock["code"]: stock["market"]
+            for stock in yahoo_stocks
+        }
+        with jobs_lock:
+            jobs[job_id].update({
+                "stage": "fetching",
+                "stocks": stock_list,
+                "markets": markets,
+                "unknown_stocks": unknown_stocks,
+                "removed_stocks": removed_stocks,
+                "progress": {"completed": 0, "total": len(stock_list)},
+            })
+
+        institution_data, price_data, margin_short_data = fetch_stock_data(
+            stock_list,
+            progress_callback=update_progress,
+        )
         with jobs_lock:
             jobs[job_id].update({
                 "status": "completed",
@@ -484,6 +608,7 @@ def run_job(job_id, stock_list, markets):
                 "margin_short_data": margin_short_data,
             })
     except Exception as error:
+        app.logger.exception("查詢工作 %s 失敗", job_id)
         with jobs_lock:
             jobs[job_id].update({"status": "failed", "error": str(error)})
 
@@ -522,11 +647,28 @@ def search_market_stocks():
     query = request.args.get("q", "").strip()
     if not query:
         return jsonify(stocks=[])
+
     try:
-        matches = refine_stock_market_labels(search_yahoo_stocks(query))
+        matches = search_yahoo_stocks(query)
     except (requests.RequestException, ValueError) as error:
-        app.logger.warning("Yahoo Finance 股票搜尋失敗：%s", error)
-        return jsonify(error="目前無法搜尋 Yahoo Finance 股票資料，請稍後再試。"), 503
+        app.logger.warning("Yahoo Finance 股票搜尋失敗，改用官方名單：%s", error)
+        matches = []
+
+    try:
+        if matches:
+            matches = refine_stock_market_labels(matches)
+        else:
+            official_stocks = get_market_stock_list()
+            normalized_query = query.casefold()
+            matches = [
+                to_official_yahoo_stock(stock)
+                for stock in official_stocks
+                if normalized_query == stock["code"].casefold()
+                or normalized_query in stock["name"].casefold()
+            ]
+    except (requests.RequestException, ValueError) as error:
+        app.logger.warning("無法讀取官方股票名單：%s", error)
+        return jsonify(error="目前無法搜尋股票資料，請稍後再試。"), 503
 
     matches.sort(key=lambda stock: (stock["code"] != query, stock["code"]))
     return jsonify(stocks=matches[:20])
@@ -565,67 +707,27 @@ def create_job():
     if not stock_list:
         return jsonify(error="目前沒有可查詢的股票，請先新增或儲存股票清單。"), 400
 
-    try:
-        with ThreadPoolExecutor(max_workers=min(len(stock_list), 10)) as executor:
-            yahoo_matches = list(executor.map(search_yahoo_stocks, stock_list))
-    except (requests.RequestException, ValueError) as error:
-        app.logger.warning("查詢前搜尋 Yahoo Finance 失敗：%s", error)
-        return jsonify(error="目前無法搜尋 Yahoo Finance 股票資料，請稍後再試。"), 503
-    valid_codes = {
-        stock["code"]
-        for matches in yahoo_matches
-        for stock in matches
-    }
-    unknown_stocks = [stock for stock in stock_list if stock not in valid_codes]
-    removed_stocks = []
-    if unknown_stocks:
-        try:
-            removed_stocks = remove_stocks_from_saved_list(unknown_stocks)
-        except StockListStorageError as error:
-            app.logger.exception("自動移除查無股票代號失敗")
-            return jsonify(error=f"查無股票代號，且無法更新已儲存清單：{error}"), 503
-        stock_list = [stock for stock in stock_list if stock in valid_codes]
-        if not stock_list:
-            return jsonify(
-                error=f"Yahoo Finance 找不到以下台灣股票代號：{', '.join(unknown_stocks)}",
-                unknown_stocks=unknown_stocks,
-                removed_stocks=removed_stocks,
-            ), 400
-
-    yahoo_stocks = refine_stock_market_labels([
-        stock
-        for matches in yahoo_matches
-        for stock in matches
-        if stock["code"] in stock_list
-    ])
-    markets = {
-        stock["code"]: stock["market"]
-        for stock in yahoo_stocks
-    }
-
     with jobs_lock:
         active = any(job["status"] in ("queued", "running") for job in jobs.values())
         if active:
-            return jsonify(
-                error="目前已有查詢工作進行中，請稍後再試。",
-                unknown_stocks=unknown_stocks,
-                removed_stocks=removed_stocks,
-            ), 409
+            return jsonify(error="目前已有查詢工作進行中，請稍後再試。"), 409
         job_id = uuid.uuid4().hex
-        jobs[job_id] = {"status": "queued", "stocks": stock_list, "markets": markets}
+        jobs[job_id] = {
+            "status": "queued",
+            "stocks": stock_list,
+            "markets": {},
+            "stage": "validating",
+            "progress": {"completed": 0, "total": len(stock_list)},
+        }
         while len(jobs) > MAX_SAVED_JOBS:
             jobs.popitem(last=False)
 
     threading.Thread(
         target=run_job,
-        args=(job_id, stock_list, markets),
+        args=(job_id, stock_list),
         daemon=True,
     ).start()
-    return jsonify(
-        job_id=job_id,
-        unknown_stocks=unknown_stocks,
-        removed_stocks=removed_stocks,
-    ), 202
+    return jsonify(job_id=job_id), 202
 
 
 @app.get("/api/jobs/<job_id>")
@@ -634,7 +736,9 @@ def get_job(job_id):
         job = jobs.get(job_id)
         if not job:
             return jsonify(error="查詢結果已不存在，請重新執行。"), 404
-        return jsonify(job)
+        response = jsonify(job)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
 
 @app.post("/api/ai-analysis")
