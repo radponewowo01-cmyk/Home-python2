@@ -73,9 +73,13 @@ class MarketStockTests(unittest.TestCase):
             def fetchall(self):
                 return []
 
+            def close(self):
+                pass
+
         class FakeConnection:
             def __init__(self, cursor):
                 self.fake_cursor = cursor
+                self.committed = False
 
             def __enter__(self):
                 return self
@@ -86,6 +90,9 @@ class MarketStockTests(unittest.TestCase):
             def close(self):
                 pass
 
+            def commit(self):
+                self.committed = True
+
             def cursor(self):
                 return self.fake_cursor
 
@@ -94,13 +101,64 @@ class MarketStockTests(unittest.TestCase):
             stock_app,
             "connect_mssql",
             return_value=FakeConnection(cursor),
-        ):
+        ) as connect:
             stocks = stock_app.read_stock_list()
 
         self.assertEqual(stocks, [])
+        self.assertTrue(connect.return_value.committed)
         self.assertTrue(any("SELECT stock_code" in sql for sql in cursor.statements))
         self.assertFalse(
             any("INSERT INTO dbo.StockList" in sql for sql in cursor.statements)
+        )
+
+    def test_mssql_stock_list_save_commits_and_verifies_written_rows(self):
+        class FakeCursor:
+            def __init__(self):
+                self.statements = []
+                self.rows = [("3090",)]
+
+            def execute(self, statement, parameters=None):
+                self.statements.append((statement, parameters))
+
+            def fetchall(self):
+                return self.rows
+
+            def close(self):
+                pass
+
+        class FakeConnection:
+            def __init__(self, cursor):
+                self.fake_cursor = cursor
+                self.committed = False
+
+            def cursor(self):
+                return self.fake_cursor
+
+            def commit(self):
+                self.committed = True
+
+            def close(self):
+                pass
+
+        cursor = FakeCursor()
+        connection = FakeConnection(cursor)
+        with mock.patch.object(
+            stock_app,
+            "connect_mssql",
+            return_value=connection,
+        ):
+            stock_app.persist_stock_list(["3090"])
+
+        self.assertTrue(connection.committed)
+        self.assertTrue(
+            any(
+                "INSERT INTO dbo.StockList" in statement
+                and parameters == ("3090", 0)
+                for statement, parameters in cursor.statements
+            )
+        )
+        self.assertTrue(
+            any("SELECT stock_code" in statement for statement, _ in cursor.statements)
         )
 
     def test_search_yahoo_stocks_keeps_taiwan_equities(self):

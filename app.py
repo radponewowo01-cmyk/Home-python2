@@ -209,9 +209,9 @@ def read_stock_list():
         connection = connect_mssql()
         try:
             with closing(connection):
-                with connection:
-                    cursor = connection.cursor()
+                with closing(connection.cursor()) as cursor:
                     initialize_mssql_stock_list(cursor)
+                    connection.commit()
                     cursor.execute(
                         "SELECT stock_code FROM dbo.StockList ORDER BY sort_order"
                     )
@@ -227,8 +227,7 @@ def persist_stock_list(stock_list):
         connection = connect_mssql()
         try:
             with closing(connection):
-                with connection:
-                    cursor = connection.cursor()
+                with closing(connection.cursor()) as cursor:
                     initialize_mssql_stock_list(cursor)
                     cursor.execute("DELETE FROM dbo.StockList")
                     for sort_order, stock in enumerate(stock_list):
@@ -237,6 +236,15 @@ def persist_stock_list(stock_list):
                             "VALUES (%s, %s)",
                             (stock, sort_order),
                         )
+                    cursor.execute(
+                        "SELECT stock_code FROM dbo.StockList ORDER BY sort_order"
+                    )
+                    persisted_stocks = [
+                        str(row[0]) for row in cursor.fetchall()
+                    ]
+                    if persisted_stocks != stock_list:
+                        raise RuntimeError("MSSQL 寫入後清單驗證不一致。")
+                    connection.commit()
         except Exception as error:
             raise StockListStorageError(
                 f"無法儲存 MSSQL 股票清單：{format_storage_error(error)}"
