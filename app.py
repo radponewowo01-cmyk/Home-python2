@@ -53,6 +53,10 @@ class StockListStorageError(Exception):
     pass
 
 
+class StockNameLookupError(Exception):
+    pass
+
+
 def format_storage_error(error):
     details = " ".join(str(value) for value in error.args)
     if not details:
@@ -197,14 +201,23 @@ def initialize_mssql_stock_list(cursor):
         BEGIN
             CREATE TABLE dbo.StockList (
                 stock_code varchar(6) NOT NULL PRIMARY KEY,
-                sort_order int NOT NULL
+                sort_order int NOT NULL,
+                stock_name nvarchar(100) NULL
             )
+        END
+        """
+    )
+    cursor.execute(
+        """
+        IF COL_LENGTH(N'dbo.StockList', N'stock_name') IS NULL
+        BEGIN
+            ALTER TABLE dbo.StockList ADD stock_name nvarchar(100) NULL
         END
         """
     )
 
 
-def read_stock_list():
+def read_stock_records():
     with stock_list_lock:
         connection = connect_mssql()
         try:
@@ -213,16 +226,25 @@ def read_stock_list():
                     initialize_mssql_stock_list(cursor)
                     connection.commit()
                     cursor.execute(
-                        "SELECT stock_code FROM dbo.StockList ORDER BY sort_order"
+                        "SELECT stock_code, stock_name "
+                        "FROM dbo.StockList ORDER BY sort_order"
                     )
-                    return [str(row[0]) for row in cursor.fetchall()]
+                    return [
+                        {"code": str(row[0]), "name": str(row[1] or "")}
+                        for row in cursor.fetchall()
+                    ]
         except Exception as error:
             raise StockListStorageError(
                 f"無法讀取 MSSQL 股票清單：{format_storage_error(error)}"
             ) from error
 
 
-def persist_stock_list(stock_list):
+def read_stock_list():
+    return [record["code"] for record in read_stock_records()]
+
+
+def persist_stock_list(stock_list, stock_names=None):
+    stock_names = stock_names or {}
     with stock_list_lock:
         connection = connect_mssql()
         try:
@@ -232,19 +254,31 @@ def persist_stock_list(stock_list):
                     cursor.execute("DELETE FROM dbo.StockList")
                     for sort_order, stock in enumerate(stock_list):
                         cursor.execute(
-                            "INSERT INTO dbo.StockList (stock_code, sort_order) "
-                            "VALUES (%s, %s)",
-                            (stock, sort_order),
+                            "INSERT INTO dbo.StockList "
+                            "(stock_code, sort_order, stock_name) "
+                            "VALUES (%s, %s, %s)",
+                            (stock, sort_order, stock_names.get(stock)),
                         )
-                    cursor.execute(
-                        "SELECT stock_code FROM dbo.StockList ORDER BY sort_order"
-                    )
-                    persisted_stocks = [
-                        str(row[0]) for row in cursor.fetchall()
-                    ]
-                    if persisted_stocks != stock_list:
-                        raise RuntimeError("MSSQL 寫入後清單驗證不一致。")
                     connection.commit()
+                    cursor.execute(
+                        "SELECT stock_code, stock_name "
+                        "FROM dbo.StockList ORDER BY sort_order"
+                    )
+                    persisted_records = cursor.fetchall()
+                    persisted_stocks = [str(row[0]) for row in persisted_records]
+                    persisted_names = {
+                        str(row[0]): str(row[1] or "")
+                        for row in persisted_records
+                    }
+                    expected_names = {
+                        stock: str(stock_names.get(stock) or "")
+                        for stock in stock_list
+                    }
+                    if (
+                        persisted_stocks != stock_list
+                        or persisted_names != expected_names
+                    ):
+                        raise RuntimeError("MSSQL 寫入後清單或名稱驗證不一致。")
         except Exception as error:
             raise StockListStorageError(
                 f"無法儲存 MSSQL 股票清單：{format_storage_error(error)}"
@@ -253,12 +287,56 @@ def persist_stock_list(stock_list):
 
 def remove_stocks_from_saved_list(stocks):
     with stock_list_lock:
-        saved_stocks = read_stock_list()
-        remaining_stocks = [stock for stock in saved_stocks if stock not in stocks]
-        removed_stocks = [stock for stock in saved_stocks if stock in stocks]
+        saved_records = read_stock_records()
+        remaining_records = [
+            record for record in saved_records if record["code"] not in stocks
+        ]
+        removed_stocks = [
+            record["code"] for record in saved_records if record["code"] in stocks
+        ]
         if removed_stocks:
-            persist_stock_list(remaining_stocks)
+            persist_stock_list(
+                [record["code"] for record in remaining_records],
+                {record["code"]: record["name"] for record in remaining_records},
+            )
         return removed_stocks
+
+
+def resolve_stock_names(stock_list, requested_names):
+    if requested_names is None:
+        requested_names = {}
+    if not isinstance(requested_names, dict):
+        raise ValueError("股票名稱格式錯誤。")
+
+    stock_names = {}
+    for stock in stock_list:
+        name = requested_names.get(stock)
+        if isinstance(name, str) and name.strip():
+            stock_names[stock] = name.strip()[:100]
+
+    missing_stocks = [stock for stock in stock_list if stock not in stock_names]
+    if missing_stocks:
+        try:
+            official_stocks = get_market_stock_list()
+        except (requests.RequestException, ValueError) as error:
+            raise StockNameLookupError(
+                f"目前無法查詢股票名稱，請稍後再試：{error}"
+            ) from error
+        official_names = {
+            stock["code"]: stock["name"]
+            for stock in official_stocks
+        }
+        for stock in missing_stocks:
+            name = official_names.get(stock)
+            if name:
+                stock_names[stock] = name[:100]
+
+    unresolved_stocks = [stock for stock in stock_list if stock not in stock_names]
+    if unresolved_stocks:
+        raise ValueError(
+            f"無法取得股票 {', '.join(unresolved_stocks)} 的名稱，請選擇搜尋結果後再儲存。"
+        )
+    return stock_names
 
 
 AI_SYSTEM_PROMPT = (
@@ -569,7 +647,15 @@ def health():
 @app.get("/api/stock-list")
 def get_stock_list():
     try:
-        response = jsonify(stocks=read_stock_list())
+        records = read_stock_records()
+        response = jsonify(
+            stocks=[record["code"] for record in records],
+            stock_names={
+                record["code"]: record["name"]
+                for record in records
+                if record["name"]
+            },
+        )
         response.headers["Cache-Control"] = "no-store"
         return response
     except StockListStorageError as error:
@@ -621,11 +707,24 @@ def save_stock_list():
         ), 400
 
     try:
-        persist_stock_list(stock_list)
+        stock_names = resolve_stock_names(
+            stock_list,
+            payload.get("stock_names"),
+        )
+        persist_stock_list(stock_list, stock_names)
     except StockListStorageError as error:
         app.logger.exception("儲存股票清單失敗")
         return jsonify(error=str(error)), 503
-    return jsonify(message="股票清單已儲存。", stocks=stock_list)
+    except StockNameLookupError as error:
+        app.logger.warning("儲存股票清單時無法取得名稱：%s", error)
+        return jsonify(error=str(error)), 503
+    except ValueError as error:
+        return jsonify(error=str(error)), 400
+    return jsonify(
+        message="股票清單已儲存。",
+        stocks=stock_list,
+        stock_names=stock_names,
+    )
 
 
 @app.post("/api/jobs")

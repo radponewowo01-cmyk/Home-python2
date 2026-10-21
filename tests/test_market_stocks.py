@@ -60,7 +60,42 @@ class MarketStockTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        persist.assert_called_once_with([])
+        persist.assert_called_once_with([], {})
+
+    def test_stock_list_save_persists_names(self):
+        with mock.patch.object(stock_app, "persist_stock_list") as persist:
+            response = self.client.post(
+                "/api/stock-list",
+                json={
+                    "stocks": ["3090"],
+                    "stock_names": {"3090": "日電貿"},
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        persist.assert_called_once_with(["3090"], {"3090": "日電貿"})
+        self.assertEqual(response.json["stock_names"], {"3090": "日電貿"})
+
+    def test_stock_list_save_resolves_missing_names_from_official_list(self):
+        official_stocks = [
+            {"code": "3090", "name": "日電貿", "market": "上市"},
+        ]
+        with (
+            mock.patch.object(
+                stock_app,
+                "get_market_stock_list",
+                return_value=official_stocks,
+            ),
+            mock.patch.object(stock_app, "persist_stock_list") as persist,
+        ):
+            response = self.client.post(
+                "/api/stock-list",
+                json={"stocks": ["3090"]},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        persist.assert_called_once_with(["3090"], {"3090": "日電貿"})
+        self.assertEqual(response.json["stock_names"], {"3090": "日電貿"})
 
     def test_first_mssql_read_returns_empty_list_without_json_seed(self):
         class FakeCursor:
@@ -107,6 +142,7 @@ class MarketStockTests(unittest.TestCase):
         self.assertEqual(stocks, [])
         self.assertTrue(connect.return_value.committed)
         self.assertTrue(any("SELECT stock_code" in sql for sql in cursor.statements))
+        self.assertTrue(any("COL_LENGTH" in sql for sql in cursor.statements))
         self.assertFalse(
             any("INSERT INTO dbo.StockList" in sql for sql in cursor.statements)
         )
@@ -115,7 +151,7 @@ class MarketStockTests(unittest.TestCase):
         class FakeCursor:
             def __init__(self):
                 self.statements = []
-                self.rows = [("3090",)]
+                self.rows = [("3090", "日電貿")]
 
             def execute(self, statement, parameters=None):
                 self.statements.append((statement, parameters))
@@ -147,13 +183,13 @@ class MarketStockTests(unittest.TestCase):
             "connect_mssql",
             return_value=connection,
         ):
-            stock_app.persist_stock_list(["3090"])
+            stock_app.persist_stock_list(["3090"], {"3090": "日電貿"})
 
         self.assertTrue(connection.committed)
         self.assertTrue(
             any(
                 "INSERT INTO dbo.StockList" in statement
-                and parameters == ("3090", 0)
+                and parameters == ("3090", 0, "日電貿")
                 for statement, parameters in cursor.statements
             )
         )
@@ -366,13 +402,16 @@ class MarketStockTests(unittest.TestCase):
         with (
             mock.patch.object(
                 stock_app,
-                "read_stock_list",
-                return_value=["9999", "2330"],
+                "read_stock_records",
+                return_value=[
+                    {"code": "9999", "name": "測試"},
+                    {"code": "2330", "name": "台積電"},
+                ],
             ),
             mock.patch.object(
                 stock_app,
                 "persist_stock_list",
-                side_effect=lambda stocks: persisted_stocks.extend(stocks),
+                side_effect=lambda stocks, names: persisted_stocks.extend(stocks),
             ),
             mock.patch.object(stock_app, "search_yahoo_stocks", return_value=[]),
             mock.patch.object(
@@ -462,13 +501,16 @@ class MarketStockTests(unittest.TestCase):
         with (
             mock.patch.object(
                 stock_app,
-                "read_stock_list",
-                return_value=["9999", "2330"],
+                "read_stock_records",
+                return_value=[
+                    {"code": "9999", "name": "測試"},
+                    {"code": "2330", "name": "台積電"},
+                ],
             ),
             mock.patch.object(
                 stock_app,
                 "persist_stock_list",
-                side_effect=lambda stocks: persisted_stocks.extend(stocks),
+                side_effect=lambda stocks, names: persisted_stocks.extend(stocks),
             ),
             mock.patch.object(
                 stock_app,
@@ -515,10 +557,16 @@ class MarketStockTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
 
     def test_deleted_stock_stays_removed_after_loading_saved_list(self):
-        saved_stocks = ["2330", "2317"]
+        saved_records = [
+            {"code": "2330", "name": "台積電"},
+            {"code": "2317", "name": "鴻海"},
+        ]
 
-        def persist_stocks(stocks):
-            saved_stocks[:] = stocks
+        def persist_stocks(stocks, names):
+            saved_records[:] = [
+                {"code": stock, "name": names.get(stock, "")}
+                for stock in stocks
+            ]
 
         with (
             mock.patch.object(
@@ -529,18 +577,27 @@ class MarketStockTests(unittest.TestCase):
             mock.patch.object(
                 stock_app,
                 "read_stock_list",
-                side_effect=lambda: list(saved_stocks),
+                side_effect=lambda: [record["code"] for record in saved_records],
+            ),
+            mock.patch.object(
+                stock_app,
+                "read_stock_records",
+                side_effect=lambda: list(saved_records),
             ),
         ):
             delete_response = self.client.post(
                 "/api/stock-list",
-                json={"stocks": ["2317"]},
+                json={
+                    "stocks": ["2317"],
+                    "stock_names": {"2317": "鴻海"},
+                },
             )
             read_response = self.client.get("/api/stock-list")
 
         self.assertEqual(delete_response.status_code, 200)
         self.assertEqual(read_response.status_code, 200)
         self.assertEqual(read_response.json["stocks"], ["2317"])
+        self.assertEqual(read_response.json["stock_names"], {"2317": "鴻海"})
         self.assertEqual(read_response.headers["Cache-Control"], "no-store")
 
 

@@ -261,6 +261,10 @@
     let stockListBusy = false;
     let queryBusy = false;
     let savedStockList = [];
+    let stockNames = {};
+    let savedStockNames = {};
+    let selectedStockCode = "";
+    let selectedStockName = "";
     let stockListDirty = false;
     let stockListLoaded = false;
 
@@ -268,8 +272,14 @@
       return [...new Set(value.split(/[\s,，;；]+/).map(stock => stock.trim()).filter(Boolean))];
     }
 
+    function stockListSnapshot(stocks, names) {
+      return stocks.map(stock => [stock, names[stock] || ""]);
+    }
+
     function updateCount() {
-      stockListDirty = JSON.stringify(stockList) !== JSON.stringify(savedStockList);
+      stockListDirty = JSON.stringify(stockListSnapshot(stockList, stockNames))
+        !== JSON.stringify(stockListSnapshot(savedStockList, savedStockNames))
+        || stockList.some(stock => !stockNames[stock]);
       countLabel.textContent = `${stockList.length} 檔${stockListDirty ? " · 未儲存" : ""}`;
       const query = stockCodeInput.value.trim();
       searchMarketStocks(query);
@@ -283,7 +293,8 @@
       } else {
         stockList.forEach(stock => {
           const item = make("li", undefined, "stock-item");
-          item.append(make("span", stock));
+          const name = stockNames[stock];
+          item.append(make("span", name ? `${stock}　${name}` : stock));
           const removeButton = make("button", "刪除", "delete-stock");
           removeButton.type = "button";
           removeButton.dataset.stock = stock;
@@ -327,6 +338,7 @@
             const button = make("button", `${stock.code}　${stock.name}　${stock.market}`, "market-stock-option");
             button.type = "button";
             button.dataset.stock = stock.code;
+            button.dataset.name = stock.name;
             item.append(button);
             marketStockListView.append(item);
           });
@@ -367,21 +379,31 @@
       );
       stockList = stockList.filter(stock => !stocks.includes(stock));
       savedStockList = savedStockList.filter(stock => !stocks.includes(stock));
+      stocks.forEach(stock => {
+        delete stockNames[stock];
+        delete savedStockNames[stock];
+      });
       updateCount();
       return listChanged
         ? `查無代號 ${stocks.join("、")}，已從清單移除。`
         : `查無代號 ${stocks.join("、")}；該代號原本不在清單中。`;
     }
 
-    async function persistStockList(stocks) {
+    async function persistStockList(stocks, names) {
       const response = await fetch("/api/stock-list", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stocks, clear_list: stocks.length === 0 }),
+        body: JSON.stringify({
+          stocks,
+          stock_names: Object.fromEntries(
+            stocks.filter(stock => names[stock]).map(stock => [stock, names[stock]])
+          ),
+          clear_list: stocks.length === 0,
+        }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "無法儲存股票清單。");
-      return payload.stocks;
+      return { stocks: payload.stocks, stock_names: payload.stock_names || {} };
     }
 
     function make(tag, text, className) {
@@ -510,7 +532,12 @@
         return setStatus("最多可加入 100 檔股票。", "error");
       }
       stockList = [...stockList, ...newStocks];
+      if (selectedStockCode && selectedStockName && stocks.includes(selectedStockCode)) {
+        stockNames[selectedStockCode] = selectedStockName;
+      }
       stockCodeInput.value = "";
+      selectedStockCode = "";
+      selectedStockName = "";
       updateCount();
       setStatus(newStocks.length ? `已加入 ${newStocks.length} 檔至目前清單；按「儲存清單」保留變更。` : "輸入的股票代號已在清單中。");
     }
@@ -520,14 +547,21 @@
       const button = event.target.closest("button[data-stock]");
       if (!button) return;
       stockCodeInput.value = button.dataset.stock;
+      selectedStockCode = button.dataset.stock;
+      selectedStockName = button.dataset.name;
       updateCount();
       stockCodeInput.focus();
     });
-    stockCodeInput.addEventListener("input", updateCount);
+    stockCodeInput.addEventListener("input", () => {
+      selectedStockCode = "";
+      selectedStockName = "";
+      updateCount();
+    });
     stockListView.addEventListener("click", event => {
       const button = event.target.closest("button[data-stock]");
       if (!button || stockListBusy) return;
       stockList = stockList.filter(stock => stock !== button.dataset.stock);
+      delete stockNames[button.dataset.stock];
       updateCount();
       setStatus(`已從目前清單刪除 ${button.dataset.stock}；按「儲存清單」保留變更。`);
     });
@@ -543,6 +577,8 @@
         if (!response.ok) throw new Error(payload.error || "無法讀取股票清單。");
         stockList = payload.stocks;
         savedStockList = [...payload.stocks];
+        stockNames = payload.stock_names || {};
+        savedStockNames = { ...stockNames };
         stockListLoaded = true;
         updateCount();
         setStatus("已讀取儲存的股票清單。");
@@ -564,10 +600,13 @@
       setStockListControlsDisabled(true);
       setStatus("正在儲存股票清單…", "running");
       try {
-        stockList = await persistStockList(stockList);
+        const saved = await persistStockList(stockList, stockNames);
+        stockList = saved.stocks;
         savedStockList = [...stockList];
+        stockNames = saved.stock_names;
+        savedStockNames = { ...stockNames };
         updateCount();
-        setStatus("目前清單已儲存，之後載入頁面時會使用這份清單。");
+        setStatus("目前清單與股票名稱已儲存至 MSSQL；重新開啟頁面後請按「讀取已儲存」載入。");
       } catch (error) {
         setStatus(error.message, "error");
       } finally {
