@@ -607,6 +607,10 @@ def save_stock_list():
     stock_list, error = validate_stock_list(payload.get("stocks"), allow_empty=True)
     if error:
         return jsonify(error=error), 400
+    if not stock_list and payload.get("clear_list") is not True:
+        return jsonify(
+            error="股票清單為空。若要清除已儲存清單，請明確確認後再試。"
+        ), 400
 
     try:
         persist_stock_list(stock_list)

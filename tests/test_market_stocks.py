@@ -42,6 +42,26 @@ class MarketStockTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertIn("MSSQL_CONNECTION_STRING", response.json["error"])
 
+    def test_empty_stock_list_save_requires_explicit_confirmation(self):
+        with mock.patch.object(stock_app, "persist_stock_list") as persist:
+            response = self.client.post(
+                "/api/stock-list",
+                json={"stocks": []},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        persist.assert_not_called()
+
+    def test_confirmed_empty_stock_list_save_is_allowed(self):
+        with mock.patch.object(stock_app, "persist_stock_list") as persist:
+            response = self.client.post(
+                "/api/stock-list",
+                json={"stocks": [], "clear_list": True},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        persist.assert_called_once_with([])
+
     def test_first_mssql_read_returns_empty_list_without_json_seed(self):
         class FakeCursor:
             def __init__(self):

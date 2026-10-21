@@ -187,11 +187,11 @@
         </div>
         <h3 class="subsection-title">Yahoo Finance 搜尋 <span class="count">台灣股票</span></h3>
         <ul id="market-stock-list" class="market-stock-list" aria-label="Yahoo Finance 股票搜尋結果"></ul>
-        <p id="market-stock-hint" class="hint" aria-live="polite">輸入代號或名稱後，選擇搜尋結果即可帶入代號。</p>
+        <p id="market-stock-hint" class="hint" aria-live="polite">輸入代號或名稱後，選擇搜尋結果會帶入代號；要儲存到清單，還需按「加入清單」。</p>
         <p id="input-hint" class="sr-only">輸入代號可直接查詢；輸入名稱可搜尋並選擇股票。多個代號請以空格或逗號分隔。</p>
         <h3 class="subsection-title">我的清單 <span id="stock-count" class="count"></span></h3>
         <ul id="stock-list" class="stock-list" aria-label="股票清單"></ul>
-        <p id="list-hint" class="hint">清單初始為空，按「讀取已儲存」才會從 MSSQL 載入；加入或刪除只會修改目前清單，按「儲存清單」才會保留。執行輸入不必加入清單，執行清單則使用目前畫面上的項目。最多 100 檔。</p>
+        <p id="list-hint" class="hint">清單初始為空，按「讀取已儲存」才會從 MSSQL 載入；選擇搜尋結果只會帶入代號，按「加入清單」後才會列入待儲存清單。加入或刪除只會修改目前清單，按「儲存清單」才會保留。執行輸入不必加入清單，執行清單則使用目前畫面上的項目。最多 100 檔。</p>
         <div class="list-actions">
           <button id="load-button" class="save-button" type="button">讀取已儲存</button>
           <button id="save-button" class="save-button" type="button">儲存清單</button>
@@ -377,7 +377,7 @@
       const response = await fetch("/api/stock-list", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stocks }),
+        body: JSON.stringify({ stocks, clear_list: stocks.length === 0 }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "無法儲存股票清單。");
@@ -555,6 +555,11 @@
     });
     saveButton.addEventListener("click", async () => {
       if (stockListBusy) return;
+      if (
+        !stockList.length
+        && savedStockList.length
+        && !window.confirm("目前清單為空，繼續儲存會清除 MSSQL 中已儲存的所有股票。確定要清除嗎？")
+      ) return;
       stockListBusy = true;
       setStockListControlsDisabled(true);
       setStatus("正在儲存股票清單…", "running");
