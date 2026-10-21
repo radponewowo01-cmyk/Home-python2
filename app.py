@@ -7,7 +7,6 @@ import uuid
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import closing
-from pathlib import Path
 
 import requests
 from flask import Flask, jsonify, render_template, request
@@ -45,8 +44,6 @@ MARKET_STOCK_SOURCES = {
         ("CompanyAbbreviation", "CompanyName"),
     ),
 }
-default_stock_list_file = Path(__file__).with_name("stock_list.json")
-stock_list_file = Path(os.environ.get("STOCK_LIST_FILE", default_stock_list_file))
 stock_list_lock = threading.RLock()
 market_stock_cache = {"expires_at": 0, "stocks": []}
 market_stock_cache_lock = threading.Lock()
@@ -65,22 +62,6 @@ def format_storage_error(error):
         r"\1=<redacted>",
         details,
     )
-
-
-def initialize_stock_list_file():
-    if stock_list_file == default_stock_list_file or stock_list_file.exists():
-        return
-
-    stock_list_file.parent.mkdir(parents=True, exist_ok=True)
-    seed_contents = default_stock_list_file.read_bytes()
-    try:
-        with stock_list_file.open("xb") as target_file:
-            target_file.write(seed_contents)
-    except FileExistsError:
-        pass
-
-
-initialize_stock_list_file()
 
 
 def parse_dotnet_connection_string(connection_string):
@@ -185,7 +166,9 @@ def to_pymssql_parameters(connection_string):
 def connect_mssql():
     connection_string = os.environ.get("MSSQL_CONNECTION_STRING")
     if not connection_string:
-        return None
+        raise StockListStorageError(
+            "尚未設定 MSSQL_CONNECTION_STRING，請先設定 MSSQL 連線資訊。"
+        )
 
     try:
         import pymssql
@@ -219,77 +202,29 @@ def initialize_mssql_stock_list(cursor):
         END
         """
     )
-    cursor.execute(
-        """
-        IF OBJECT_ID(N'dbo.StockListState', N'U') IS NULL
-        BEGIN
-            CREATE TABLE dbo.StockListState (
-                state_id tinyint NOT NULL PRIMARY KEY,
-                initialized bit NOT NULL,
-                CONSTRAINT CK_StockListState_Singleton CHECK (state_id = 1)
-            )
-        END
-        """
-    )
-    cursor.execute(
-        """
-        SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-        SELECT state_id
-        FROM dbo.StockListState WITH (UPDLOCK, HOLDLOCK)
-        WHERE state_id = 1
-        """
-    )
-    if cursor.fetchone() is not None:
-        return
-
-    seed_stocks = [
-        str(stock)
-        for stock in json.loads(stock_list_file.read_text(encoding="utf-8"))
-    ]
-    for sort_order, stock in enumerate(seed_stocks):
-        cursor.execute(
-            "INSERT INTO dbo.StockList (stock_code, sort_order) VALUES (%s, %s)",
-            (stock, sort_order),
-        )
-    cursor.execute(
-        "INSERT INTO dbo.StockListState (state_id, initialized) VALUES (1, 1)"
-    )
 
 
 def read_stock_list():
     with stock_list_lock:
         connection = connect_mssql()
-        if connection is not None:
-            try:
-                with closing(connection):
-                    with connection:
-                        cursor = connection.cursor()
-                        initialize_mssql_stock_list(cursor)
-                        cursor.execute(
-                            "SELECT stock_code FROM dbo.StockList ORDER BY sort_order"
-                        )
-                        return [str(row[0]) for row in cursor.fetchall()]
-            except Exception as error:
-                raise StockListStorageError(
-                    f"無法讀取 MSSQL 股票清單：{format_storage_error(error)}"
-                ) from error
-
-        return [
-            str(stock)
-            for stock in json.loads(stock_list_file.read_text(encoding="utf-8"))
-        ]
+        try:
+            with closing(connection):
+                with connection:
+                    cursor = connection.cursor()
+                    initialize_mssql_stock_list(cursor)
+                    cursor.execute(
+                        "SELECT stock_code FROM dbo.StockList ORDER BY sort_order"
+                    )
+                    return [str(row[0]) for row in cursor.fetchall()]
+        except Exception as error:
+            raise StockListStorageError(
+                f"無法讀取 MSSQL 股票清單：{format_storage_error(error)}"
+            ) from error
 
 
 def persist_stock_list(stock_list):
     with stock_list_lock:
         connection = connect_mssql()
-        if connection is None:
-            stock_list_file.write_text(
-                json.dumps(stock_list, indent=2),
-                encoding="utf-8",
-            )
-            return
-
         try:
             with closing(connection):
                 with connection:
@@ -615,15 +550,7 @@ def run_job(job_id, stock_list):
 
 @app.get("/")
 def index():
-    try:
-        stock_list = read_stock_list()
-    except StockListStorageError as error:
-        app.logger.exception("載入股票清單失敗")
-        return render_template(
-            "storage-error.html",
-            error_message=str(error),
-        ), 503
-    return render_template("index.html", stock_list=stock_list)
+    return render_template("index.html")
 
 
 @app.get("/health")
@@ -693,16 +620,9 @@ def save_stock_list():
 def create_job():
     payload = request.get_json(silent=True) or {}
     requested_stocks = payload.get("stocks")
-    if requested_stocks in (None, []) or (isinstance(requested_stocks, list) and not requested_stocks):
-        try:
-            stock_list = read_stock_list()
-        except StockListStorageError as error:
-            app.logger.exception("讀取儲存的股票清單失敗")
-            return jsonify(error=str(error)), 503
-    else:
-        stock_list, error = validate_stock_list(requested_stocks)
-        if error:
-            return jsonify(error=error), 400
+    stock_list, error = validate_stock_list(requested_stocks)
+    if error:
+        return jsonify(error=error), 400
 
     if not stock_list:
         return jsonify(error="目前沒有可查詢的股票，請先新增或儲存股票清單。"), 400

@@ -1,9 +1,6 @@
-import json
-import tempfile
 import unittest
 from concurrent.futures import Future
 from contextlib import nullcontext
-from pathlib import Path
 from unittest import mock
 
 import app as stock_app
@@ -26,6 +23,65 @@ class MarketStockTests(unittest.TestCase):
         stock_app.jobs.clear()
         stock_app.market_stock_cache.update({"expires_at": 0, "stocks": []})
         self.client = stock_app.app.test_client()
+
+    def test_index_does_not_read_stock_list_from_mssql(self):
+        with mock.patch.object(
+            stock_app,
+            "connect_mssql",
+            side_effect=AssertionError("首頁不應連線讀取清單"),
+        ):
+            response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"let stockList = [];", response.data)
+
+    def test_stock_list_read_requires_mssql_configuration(self):
+        with mock.patch.dict(stock_app.os.environ, {}, clear=True):
+            response = self.client.get("/api/stock-list")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("MSSQL_CONNECTION_STRING", response.json["error"])
+
+    def test_first_mssql_read_returns_empty_list_without_json_seed(self):
+        class FakeCursor:
+            def __init__(self):
+                self.statements = []
+
+            def execute(self, statement, parameters=None):
+                self.statements.append(statement)
+
+            def fetchall(self):
+                return []
+
+        class FakeConnection:
+            def __init__(self, cursor):
+                self.fake_cursor = cursor
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return None
+
+            def close(self):
+                pass
+
+            def cursor(self):
+                return self.fake_cursor
+
+        cursor = FakeCursor()
+        with mock.patch.object(
+            stock_app,
+            "connect_mssql",
+            return_value=FakeConnection(cursor),
+        ):
+            stocks = stock_app.read_stock_list()
+
+        self.assertEqual(stocks, [])
+        self.assertTrue(any("SELECT stock_code" in sql for sql in cursor.statements))
+        self.assertFalse(
+            any("INSERT INTO dbo.StockList" in sql for sql in cursor.statements)
+        )
 
     def test_search_yahoo_stocks_keeps_taiwan_equities(self):
         response = mock.Mock()
@@ -228,29 +284,34 @@ class MarketStockTests(unittest.TestCase):
             def start(self):
                 self.target(*self.args)
 
-        with tempfile.TemporaryDirectory() as temp_directory:
-            stock_list_file = Path(temp_directory) / "stock_list.json"
-            stock_list_file.write_text(json.dumps(["9999", "2330"]), encoding="utf-8")
-            with (
-                mock.patch.object(stock_app, "stock_list_file", stock_list_file),
-                mock.patch.object(stock_app, "connect_mssql", return_value=None),
-                mock.patch.object(stock_app, "search_yahoo_stocks", return_value=[]),
-                mock.patch.object(
-                    stock_app,
-                    "get_market_stock_list",
-                    return_value=[
-                        {"code": "2330", "name": "台積電", "market": "上市"},
-                    ],
-                ),
-                mock.patch.object(
-                    stock_app,
-                    "ThreadPoolExecutor",
-                    return_value=nullcontext(ImmediateExecutor()),
-                ),
-                mock.patch.object(stock_app.threading, "Thread", CapturedThread),
-            ):
-                response = self.client.post("/api/jobs", json={"stocks": ["9999"]})
-                saved_stocks = json.loads(stock_list_file.read_text(encoding="utf-8"))
+        persisted_stocks = []
+        with (
+            mock.patch.object(
+                stock_app,
+                "read_stock_list",
+                return_value=["9999", "2330"],
+            ),
+            mock.patch.object(
+                stock_app,
+                "persist_stock_list",
+                side_effect=lambda stocks: persisted_stocks.extend(stocks),
+            ),
+            mock.patch.object(stock_app, "search_yahoo_stocks", return_value=[]),
+            mock.patch.object(
+                stock_app,
+                "get_market_stock_list",
+                return_value=[
+                    {"code": "2330", "name": "台積電", "market": "上市"},
+                ],
+            ),
+            mock.patch.object(
+                stock_app,
+                "ThreadPoolExecutor",
+                return_value=nullcontext(ImmediateExecutor()),
+            ),
+            mock.patch.object(stock_app.threading, "Thread", CapturedThread),
+        ):
+            response = self.client.post("/api/jobs", json={"stocks": ["9999"]})
 
         self.assertEqual(response.status_code, 202)
         job = stock_app.jobs[response.json["job_id"]]
@@ -258,7 +319,7 @@ class MarketStockTests(unittest.TestCase):
         self.assertIn("都找不到", job["error"])
         self.assertEqual(job["unknown_stocks"], ["9999"])
         self.assertEqual(job["removed_stocks"], ["9999"])
-        self.assertEqual(saved_stocks, ["2330"])
+        self.assertEqual(persisted_stocks, ["2330"])
 
     def test_official_market_listing_keeps_stock_when_yahoo_returns_no_match(self):
         class CapturedThread:
@@ -319,71 +380,22 @@ class MarketStockTests(unittest.TestCase):
             "symbol": "2330.TW",
         }
 
-        with tempfile.TemporaryDirectory() as temp_directory:
-            stock_list_file = Path(temp_directory) / "stock_list.json"
-            stock_list_file.write_text(json.dumps(["9999", "2330"]), encoding="utf-8")
-            with (
-                mock.patch.object(stock_app, "stock_list_file", stock_list_file),
-                mock.patch.object(stock_app, "connect_mssql", return_value=None),
-                mock.patch.object(
-                    stock_app,
-                    "search_yahoo_stocks",
-                    side_effect=lambda code: [] if code == "9999" else [valid_match],
-                ),
-                mock.patch.object(
-                    stock_app,
-                    "ThreadPoolExecutor",
-                    return_value=nullcontext(ImmediateExecutor()),
-                ),
-                mock.patch.object(
-                    stock_app,
-                    "get_market_stock_list",
-                    return_value=[{"code": "2330", "name": "台積電", "market": "上市"}],
-                ),
-                mock.patch.object(stock_app.threading, "Thread", CapturedThread),
-                mock.patch.object(
-                    stock_app,
-                    "fetch_stock_data",
-                    return_value=({}, {}, {}),
-                ),
-            ):
-                response = self.client.post(
-                    "/api/jobs",
-                    json={"stocks": ["9999", "2330"]},
-                )
-                saved_stocks = json.loads(stock_list_file.read_text(encoding="utf-8"))
-
-        self.assertEqual(response.status_code, 202)
-        self.assertEqual(saved_stocks, ["2330"])
-        job = stock_app.jobs[response.json["job_id"]]
-        self.assertEqual(job["stocks"], ["2330"])
-        self.assertEqual(job["unknown_stocks"], ["9999"])
-        self.assertEqual(job["removed_stocks"], ["9999"])
-
-    def test_query_uses_saved_list_when_input_is_empty(self):
-        yahoo_matches = [[
-            {"code": "2330", "name": "Taiwan Semiconductor", "market": "上市", "symbol": "2330.TW"},
-            {"code": "2317", "name": "鴻海", "market": "上市", "symbol": "2317.TW"},
-        ]]
-
-        class CapturedThread:
-            def __init__(self, target, args, daemon):
-                self.target = target
-                self.args = args
-                self.daemon = daemon
-
-            def start(self):
-                self.target(*self.args)
-
+        persisted_stocks = []
         with (
-            mock.patch.object(stock_app, "read_stock_list", return_value=["2330", "2317"]),
+            mock.patch.object(
+                stock_app,
+                "read_stock_list",
+                return_value=["9999", "2330"],
+            ),
+            mock.patch.object(
+                stock_app,
+                "persist_stock_list",
+                side_effect=lambda stocks: persisted_stocks.extend(stocks),
+            ),
             mock.patch.object(
                 stock_app,
                 "search_yahoo_stocks",
-                side_effect=lambda code: next(
-                    matches for matches in yahoo_matches
-                    if any(stock["code"] == code for stock in matches)
-                ),
+                side_effect=lambda code: [] if code == "9999" else [valid_match],
             ),
             mock.patch.object(
                 stock_app,
@@ -393,7 +405,7 @@ class MarketStockTests(unittest.TestCase):
             mock.patch.object(
                 stock_app,
                 "get_market_stock_list",
-                return_value=[{"code": "2330", "name": "台積電", "market": "上市"}, {"code": "2317", "name": "鴻海", "market": "上市"}],
+                return_value=[{"code": "2330", "name": "台積電", "market": "上市"}],
             ),
             mock.patch.object(stock_app.threading, "Thread", CapturedThread),
             mock.patch.object(
@@ -402,26 +414,51 @@ class MarketStockTests(unittest.TestCase):
                 return_value=({}, {}, {}),
             ),
         ):
-            response = self.client.post("/api/jobs", json={"stocks": []})
+            response = self.client.post(
+                "/api/jobs",
+                json={"stocks": ["9999", "2330"]},
+            )
 
         self.assertEqual(response.status_code, 202)
+        self.assertEqual(persisted_stocks, ["2330"])
         job = stock_app.jobs[response.json["job_id"]]
-        self.assertEqual(job["stocks"], ["2330", "2317"])
-        self.assertEqual(job["markets"], {"2330": "上市", "2317": "上市"})
+        self.assertEqual(job["stocks"], ["2330"])
+        self.assertEqual(job["unknown_stocks"], ["9999"])
+        self.assertEqual(job["removed_stocks"], ["9999"])
+
+    def test_query_rejects_empty_input_without_loading_saved_list(self):
+        with mock.patch.object(
+            stock_app,
+            "read_stock_list",
+            side_effect=AssertionError("空輸入不應自動讀取清單"),
+        ):
+            response = self.client.post("/api/jobs", json={"stocks": []})
+
+        self.assertEqual(response.status_code, 400)
 
     def test_deleted_stock_stays_removed_after_loading_saved_list(self):
-        with tempfile.TemporaryDirectory() as temp_directory:
-            stock_list_file = Path(temp_directory) / "stock_list.json"
-            stock_list_file.write_text(json.dumps(["2330", "2317"]), encoding="utf-8")
-            with (
-                mock.patch.object(stock_app, "stock_list_file", stock_list_file),
-                mock.patch.object(stock_app, "connect_mssql", return_value=None),
-            ):
-                delete_response = self.client.post(
-                    "/api/stock-list",
-                    json={"stocks": ["2317"]},
-                )
-                read_response = self.client.get("/api/stock-list")
+        saved_stocks = ["2330", "2317"]
+
+        def persist_stocks(stocks):
+            saved_stocks[:] = stocks
+
+        with (
+            mock.patch.object(
+                stock_app,
+                "persist_stock_list",
+                side_effect=persist_stocks,
+            ),
+            mock.patch.object(
+                stock_app,
+                "read_stock_list",
+                side_effect=lambda: list(saved_stocks),
+            ),
+        ):
+            delete_response = self.client.post(
+                "/api/stock-list",
+                json={"stocks": ["2317"]},
+            )
+            read_response = self.client.get("/api/stock-list")
 
         self.assertEqual(delete_response.status_code, 200)
         self.assertEqual(read_response.status_code, 200)

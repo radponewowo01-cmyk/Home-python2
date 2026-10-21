@@ -191,7 +191,7 @@
         <p id="input-hint" class="sr-only">輸入代號可直接查詢；輸入名稱可搜尋並選擇股票。多個代號請以空格或逗號分隔。</p>
         <h3 class="subsection-title">我的清單 <span id="stock-count" class="count"></span></h3>
         <ul id="stock-list" class="stock-list" aria-label="股票清單"></ul>
-        <p id="list-hint" class="hint">加入或刪除只會修改目前清單，按「儲存清單」才會保留；讀取會載入已儲存版本。執行輸入不必加入清單，執行清單則使用目前畫面上的項目。最多 100 檔。</p>
+        <p id="list-hint" class="hint">清單初始為空，按「讀取已儲存」才會從 MSSQL 載入；加入或刪除只會修改目前清單，按「儲存清單」才會保留。執行輸入不必加入清單，執行清單則使用目前畫面上的項目。最多 100 檔。</p>
         <div class="list-actions">
           <button id="load-button" class="save-button" type="button">讀取已儲存</button>
           <button id="save-button" class="save-button" type="button">儲存清單</button>
@@ -254,14 +254,15 @@
     const downloadMarginShort = document.querySelector("#download-margin-short");
     const aiProvider = document.querySelector("#ai-provider");
     const analyzeButton = document.querySelector("#analyze-button");
-    let stockList = {{ stock_list|tojson }};
+    let stockList = [];
     let resultData = null;
     let marketSearchTimer = null;
     let marketSearchSequence = 0;
     let stockListBusy = false;
     let queryBusy = false;
-    let savedStockList = [...stockList];
+    let savedStockList = [];
     let stockListDirty = false;
+    let stockListLoaded = false;
 
     function parseStockCodes(value) {
       return [...new Set(value.split(/[\s,，;；]+/).map(stock => stock.trim()).filter(Boolean))];
@@ -274,7 +275,10 @@
       searchMarketStocks(query);
       stockListView.replaceChildren();
       if (!stockList.length) {
-        const empty = make("li", "清單目前沒有股票。", "empty-list");
+        const message = stockListLoaded
+          ? "清單目前沒有股票。"
+          : "清單尚未讀取，按「讀取已儲存」載入。";
+        const empty = make("li", message, "empty-list");
         stockListView.append(empty);
       } else {
         stockList.forEach(stock => {
@@ -539,6 +543,7 @@
         if (!response.ok) throw new Error(payload.error || "無法讀取股票清單。");
         stockList = payload.stocks;
         savedStockList = [...payload.stocks];
+        stockListLoaded = true;
         updateCount();
         setStatus("已讀取儲存的股票清單。");
       } catch (error) {

@@ -204,9 +204,9 @@ def fetch_stock_data(stock_list, progress_callback=None):
 
 
 def main():
-    stock_list_file = Path(__file__).with_name("stock_list.json")
-    with stock_list_file.open(encoding="utf-8") as stock_file:
-        stock_list = json.load(stock_file)
+    from app import read_stock_list
+
+    stock_list = read_stock_list()
 
     institution_data, price_data, margin_short_data = fetch_stock_data(stock_list)
     output_file = Path(__file__).with_name("stock.txt")

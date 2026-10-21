@@ -1,19 +1,15 @@
 # Home-python2
 
-## Render 持久化股票清單
+## 股票清單與 MSSQL
 
-`render.yaml` 會為 Web Service 掛載 `/var/data` 持久磁碟，並透過 `STOCK_LIST_FILE` 將股票清單寫入 `/var/data/stock_list.json`。磁碟首次建立且該檔案尚不存在時，應用程式會從部署版本內的 `stock_list.json` 複製初始清單；之後重新部署或重啟時會保留磁碟上的清單。
+股票清單只使用 MSSQL 儲存，不再讀取或匯入 JSON 清單。請在服務環境變數或 Secret 管理中設定 `MSSQL_CONNECTION_STRING`；未設定或無法連線時，清單讀取與儲存會回報錯誤，不會改用本機檔案。
 
-網頁以 Yahoo Finance 搜尋台灣股票代號或名稱，並可直接查詢，不需要先加入「我的清單」。輸入欄可執行單一或多個代號；「執行清單」則查詢目前顯示的清單。數字代號會分別查詢 Yahoo Finance 的 `.TW`、`.TWO` 符號；搜尋無結果或 Yahoo Finance 暫時無法使用時，會改以證交所／櫃買中心官方名單確認代號及市場分類（名單快取 6 小時）。只有 Yahoo Finance 與官方名單都查無的代號，才會自動從已儲存清單移除；批次查詢仍會繼續查詢其餘有效代號，畫面也會同步移除並顯示提示。加入或手動刪除股票只會修改目前清單，按「儲存清單」才會保留變更；「讀取已儲存」會載入已儲存版本，若目前有未儲存變更會先確認。清單可儲存為空。行情、法人及融資融券資料仍取決於各資料來源對該股票的支援與供應狀況。
+網頁開啟時清單一律從空白開始，不會在載入頁面時讀取資料庫。按「讀取已儲存」才會從 MSSQL 載入清單；加入或刪除只會修改目前畫面上的清單，按「儲存清單」才會寫入資料庫。資料庫尚無清單資料時，首次讀取會建立空的 `dbo.StockList` 資料表，不會匯入預設股票。若目前清單為空，執行清單不會自動讀取資料庫。
+
+可使用 Somee 提供的 .NET 格式連線字串（`workstation id`、`data source`、`user id`、`pwd`、`initial catalog`）；應用程式使用 `pymssql` 解析及連線，不需 ODBC Driver。`data source` 若包含 `,1434` 等連接埠，程式會自動拆分主機與連接埠。資料庫帳號需有建立資料表及讀寫資料的權限。Render 建置時會從 `requirements.txt` 安裝 `pymssql`；其官方 Linux wheel 包含 FreeTDS，因此不需另行安裝 unixODBC 或 ODBC Driver。
+
+網頁以 Yahoo Finance 搜尋台灣股票代號或名稱，並可直接查詢，不需要先加入「我的清單」。輸入欄可執行單一或多個代號；「執行清單」則查詢目前畫面上的項目。數字代號會分別查詢 Yahoo Finance 的 `.TW`、`.TWO` 符號；搜尋無結果或 Yahoo Finance 暫時無法使用時，會改以證交所／櫃買中心官方名單確認代號及市場分類（名單快取 6 小時）。只有 Yahoo Finance 與官方名單都查無的代號，才會自動從 MSSQL 已儲存清單移除；批次查詢仍會繼續查詢其餘有效代號，畫面也會同步移除並顯示提示。清單可儲存為空。行情、法人及融資融券資料仍取決於各資料來源對該股票的支援與供應狀況。
 
 查詢工作會先回覆並在背景驗證代號，之後顯示抓取進度。法人、行情及融資融券資料會以最多 3 檔股票並行抓取，避免對資料來源造成過多同時請求；各來源回應速度與逾時仍會影響總耗時。
 
-若要保留目前服務中已儲存、但尚未提交至 Git 的清單，請在套用磁碟設定前先將網頁中的清單複製到專案的 `stock_list.json` 並提交。新掛載的磁碟不會自動包含舊執行個體的暫存檔案。
-
-Render Persistent Disk 需要付費 Web Service，且掛載磁碟的服務只能使用單一執行個體。請在 Render Dashboard 確認磁碟與服務方案及費用。
-
-## 使用 MSSQL 儲存股票清單
-
-設定 `MSSQL_CONNECTION_STRING` 環境變數後，網頁的股票清單讀取及儲存會改用 MSSQL；未設定時仍使用 `STOCK_LIST_FILE` 指定的 JSON 檔案。請將連線字串設在服務的環境變數或 Secret 管理中，不要提交到程式碼或版控。可直接使用 Somee 提供的 .NET 格式（`workstation id`、`data source`、`user id`、`pwd`、`initial catalog`）；應用程式會使用 `pymssql` 解析欄位並連線，不需 ODBC Driver。
-
-Render 建置時會從 `requirements.txt` 安裝 `pymssql`；其官方 Linux wheel 包含 FreeTDS，因此不需在 Render 安裝 unixODBC 或 ODBC Driver。Somee 的 `data source` 若包含 `,1434` 等連接埠，程式會自動拆分主機與連接埠。資料庫帳號需有建立資料表及讀寫資料的權限。第一次連線時，應用程式會建立 `dbo.StockList`（股票代號與排序）及 `dbo.StockListState`（初始化標記）；初始化時將 `stock_list.json` 匯入一次。之後資料庫是股票清單的主要來源，清單即使儲存為空也不會在重啟時重新匯入 JSON。
+`tw_stock.py` 的命令列入口也會從 MSSQL 讀取股票清單；其行情結果仍會輸出為文字檔。
