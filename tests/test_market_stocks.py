@@ -34,6 +34,7 @@ class MarketStockTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"let stockList = [];", response.data)
+        self.assertIn(b'data-price-period="1y"', response.data)
 
     def test_stock_list_read_requires_mssql_configuration(self):
         with mock.patch.dict(stock_app.os.environ, {}, clear=True):
@@ -310,14 +311,32 @@ class MarketStockTests(unittest.TestCase):
                 stock_app,
                 "fetch_stock_data",
                 return_value=({}, {}, {}),
-            ),
+            ) as fetch_data,
         ):
-            response = self.client.post("/api/jobs", json={"stocks": ["2330"]})
+            response = self.client.post(
+                "/api/jobs",
+                json={"stocks": ["2330"], "price_period": "1y"},
+            )
 
         self.assertEqual(response.status_code, 202)
         job = stock_app.jobs[response.json["job_id"]]
         self.assertEqual(job["stocks"], ["2330"])
+        self.assertEqual(job["price_period"], "1y")
         self.assertEqual(job["markets"], {"2330": "上市"})
+        fetch_data.assert_called_once_with(
+            ["2330"],
+            progress_callback=mock.ANY,
+            price_period="1y",
+        )
+
+    def test_query_rejects_unsupported_price_period(self):
+        response = self.client.post(
+            "/api/jobs",
+            json={"stocks": ["2330"], "price_period": "10y"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("近 30 日或近 1 年", response.json["error"])
 
     def test_query_is_enqueued_before_yahoo_validation(self):
         class CapturedThread:
@@ -366,7 +385,7 @@ class MarketStockTests(unittest.TestCase):
             mock.patch.object(
                 tw_stock,
                 "fetch_price_data",
-                side_effect=lambda stocks: fetch_category(stocks, "prices"),
+                side_effect=lambda stocks, period="30d": fetch_category(stocks, "prices"),
             ),
             mock.patch.object(
                 tw_stock,
@@ -387,6 +406,26 @@ class MarketStockTests(unittest.TestCase):
         self.assertEqual(list(margin), expected_stocks)
         self.assertEqual(sorted(progress), [(index, 5) for index in range(1, 6)])
         self.assertEqual(executor_limits, [3])
+
+    def test_fetch_price_data_uses_requested_period(self):
+        empty_price_frame = mock.Mock(empty=False)
+        empty_price_frame.iterrows.return_value = []
+
+        with mock.patch.object(
+            tw_stock.yf,
+            "download",
+            return_value=empty_price_frame,
+        ) as download:
+            data = tw_stock.fetch_price_data(["2330"], period="1y")
+
+        self.assertEqual(data, {"2330": []})
+        download.assert_called_once_with(
+            "2330.TW",
+            period="1y",
+            auto_adjust=False,
+            progress=False,
+            timeout=15,
+        )
 
     def test_query_rejects_code_outside_official_markets(self):
         class CapturedThread:

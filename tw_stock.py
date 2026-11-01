@@ -117,19 +117,20 @@ def _cell_value(row, column):
         return None
 
 
-def fetch_price_data(stock_list):
+def fetch_price_data(stock_list, period="30d"):
     all_price_data = {}
+    period_label = "近 1 年" if period == "1y" else "近 30 日"
 
     for stock in stock_list:
         stock_symbol = None
         try:
             price_data = None
             for candidate_symbol in to_yahoo_symbols(stock):
-                print(f"抓取 {candidate_symbol} 的近 30 日股價")
+                print(f"抓取 {candidate_symbol} 的{period_label}股價")
                 try:
                     candidate_data = yf.download(
                         candidate_symbol,
-                        period="30d",
+                        period=period,
                         auto_adjust=False,
                         progress=False,
                         timeout=15,
@@ -160,13 +161,13 @@ def fetch_price_data(stock_list):
 
             all_price_data[stock] = stock_price_data
         except Exception as error:
-            print(f"無法取得 {stock_symbol or stock} 的近 30 日股價資料，錯誤：{error}")
+            print(f"無法取得 {stock_symbol or stock} 的{period_label}股價資料，錯誤：{error}")
             all_price_data[stock] = []
 
     return all_price_data
 
 
-def fetch_stock_data(stock_list, progress_callback=None):
+def fetch_stock_data(stock_list, progress_callback=None, price_period="30d"):
     if not stock_list:
         return {}, {}, {}
 
@@ -174,7 +175,7 @@ def fetch_stock_data(stock_list, progress_callback=None):
         return (
             stock,
             fetch_institution_data([stock])[stock],
-            fetch_price_data([stock])[stock],
+            fetch_price_data([stock], period=price_period)[stock],
             fetch_margin_short_data([stock])[stock],
         )
 

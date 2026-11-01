@@ -496,7 +496,7 @@ def refine_stock_market_labels(stocks):
     return stocks
 
 
-def run_job(job_id, stock_list):
+def run_job(job_id, stock_list, price_period):
     with jobs_lock:
         jobs[job_id].update({
             "status": "running",
@@ -619,6 +619,7 @@ def run_job(job_id, stock_list):
         institution_data, price_data, margin_short_data = fetch_stock_data(
             stock_list,
             progress_callback=update_progress,
+            price_period=price_period,
         )
         with jobs_lock:
             jobs[job_id].update({
@@ -731,6 +732,10 @@ def save_stock_list():
 def create_job():
     payload = request.get_json(silent=True) or {}
     requested_stocks = payload.get("stocks")
+    price_period = payload.get("price_period", "30d")
+    if price_period not in ("30d", "1y"):
+        return jsonify(error="股價資料期間僅支援近 30 日或近 1 年。"), 400
+
     stock_list, error = validate_stock_list(requested_stocks)
     if error:
         return jsonify(error=error), 400
@@ -746,6 +751,7 @@ def create_job():
         jobs[job_id] = {
             "status": "queued",
             "stocks": stock_list,
+            "price_period": price_period,
             "markets": {},
             "stage": "validating",
             "progress": {"completed": 0, "total": len(stock_list)},
@@ -755,7 +761,7 @@ def create_job():
 
     threading.Thread(
         target=run_job,
-        args=(job_id, stock_list),
+        args=(job_id, stock_list, price_period),
         daemon=True,
     ).start()
     return jsonify(job_id=job_id), 202

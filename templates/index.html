@@ -87,6 +87,15 @@
     .run-list-button:disabled { cursor: not-allowed; opacity: .5; }
     .run-icon { font-size: 16px; }
     .form-actions { display: grid; grid-template-columns: 1fr; gap: 8px; }
+    .period-control { margin-bottom: 12px; }
+    .period-label { margin-bottom: 7px; color: var(--muted); font-size: 12px; }
+    .period-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+    .period-button {
+      min-height: 36px; border: 1px solid var(--line); border-radius: 4px;
+      color: var(--ink); background: white; font-size: 12px; font-weight: 600;
+    }
+    .period-button[aria-pressed="true"] { border-color: var(--green); color: var(--green-dark); background: var(--soft-green); }
+    .period-button:disabled { cursor: wait; opacity: .6; }
     .list-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
     .save-button {
       min-height: 43px; border: 1px solid var(--line); border-radius: 4px;
@@ -164,7 +173,7 @@
 <body>
   <header class="topbar">
     <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>MARKET / TW</span></div>
-    <span class="top-note">台灣股票資料 · 法人持股、融資融券與近 30 日行情</span>
+    <span class="top-note">台灣股票資料 · 法人持股、融資融券與股價行情</span>
   </header>
   <main>
     <div class="heading">
@@ -196,6 +205,13 @@
           <button id="load-button" class="save-button" type="button">讀取已儲存</button>
           <button id="save-button" class="save-button" type="button">儲存清單</button>
         </div>
+        <div class="period-control" role="group" aria-label="股價資料期間">
+          <div class="period-label">股價資料期間</div>
+          <div class="period-actions">
+            <button class="period-button" type="button" data-price-period="30d" aria-pressed="true">近 30 日</button>
+            <button class="period-button" type="button" data-price-period="1y" aria-pressed="false">近 1 年</button>
+          </div>
+        </div>
         <div class="form-actions">
           <button id="run-button" class="run-button" type="submit"><span class="run-icon" aria-hidden="true">↗</span><span>執行輸入</span></button>
           <button id="run-list-button" class="run-list-button" type="button">執行清單</button>
@@ -205,7 +221,7 @@
         <div class="results-head">
           <div class="tabs" role="tablist" aria-label="資料類型">
             <button class="tab" type="button" role="tab" aria-selected="true" data-view="institution">法人持股</button>
-            <button class="tab" type="button" role="tab" aria-selected="false" data-view="prices">近 30 日股價</button>
+            <button id="prices-tab" class="tab" type="button" role="tab" aria-selected="false" data-view="prices">近 30 日股價</button>
             <button class="tab" type="button" role="tab" aria-selected="false" data-view="margin-short">融資融券</button>
             <button class="tab" type="button" role="tab" aria-selected="false" data-view="analysis">AI 分析</button>
           </div>
@@ -225,7 +241,7 @@
         </div>
         <div id="status" class="status" role="status" aria-live="polite" hidden><span class="status-dot" aria-hidden="true"></span><span id="status-text"></span></div>
         <div id="institution-view" class="result-content" role="tabpanel"><div class="empty"><div><span class="empty-mark" aria-hidden="true">↘</span>輸入股票代號後執行查詢，結果會顯示在這裡。</div></div></div>
-        <div id="prices-view" class="result-content" role="tabpanel" hidden><div class="empty"><div><span class="empty-mark" aria-hidden="true">↘</span>近 30 日股價將整理成每日行情表。</div></div></div>
+        <div id="prices-view" class="result-content" role="tabpanel" hidden><div class="empty"><div><span class="empty-mark" aria-hidden="true">↘</span>股價將整理成每日行情表。</div></div></div>
         <div id="margin-short-view" class="result-content" role="tabpanel" hidden><div class="empty"><div><span class="empty-mark" aria-hidden="true">↘</span>融資融券資料將整理成每日明細表。</div></div></div>
         <div id="analysis-view" class="result-content" role="tabpanel" hidden><div class="empty"><div><span class="empty-mark" aria-hidden="true">✳</span>完成查詢後，可根據目前資料產生 AI 分析。</div></div></div>
       </section>
@@ -240,6 +256,8 @@
     const countLabel = document.querySelector("#stock-count");
     const runButton = document.querySelector("#run-button");
     const runListButton = document.querySelector("#run-list-button");
+    const pricePeriodButtons = document.querySelectorAll("[data-price-period]");
+    const pricesTab = document.querySelector("#prices-tab");
     const saveButton = document.querySelector("#save-button");
     const loadButton = document.querySelector("#load-button");
     const addButton = document.querySelector("#add-button");
@@ -267,6 +285,7 @@
     let selectedStockName = "";
     let stockListDirty = false;
     let stockListLoaded = false;
+    let pricePeriod = "30d";
 
     function parseStockCodes(value) {
       return [...new Set(value.split(/[\s,，;；]+/).map(stock => stock.trim()).filter(Boolean))];
@@ -370,6 +389,19 @@
       queryBusy = disabled;
       runButton.disabled = disabled;
       runListButton.disabled = disabled || stockList.length === 0;
+      pricePeriodButtons.forEach(button => { button.disabled = disabled; });
+    }
+
+    function setPricePeriod(period) {
+      pricePeriod = period;
+      pricePeriodButtons.forEach(button => {
+        button.setAttribute("aria-pressed", String(button.dataset.pricePeriod === period));
+      });
+      if (!resultData) updatePricesTab(period);
+    }
+
+    function updatePricesTab(period) {
+      pricesTab.textContent = period === "1y" ? "近 1 年股價" : "近 30 日股價";
     }
 
     function removeUnavailableStocks(stocks) {
@@ -639,12 +671,13 @@
       downloadMarginShort.disabled = true;
       analyzeButton.disabled = true;
       resultData = null;
+      updatePricesTab(pricePeriod);
       setStatus(`正在送出「${source}」查詢工作…`, "running");
       try {
         const response = await fetch("/api/jobs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ stocks }),
+          body: JSON.stringify({ stocks, price_period: pricePeriod }),
         });
         const payload = await response.json();
         if (!response.ok) {
@@ -658,6 +691,7 @@
           return;
         }
         resultData = job;
+        updatePricesTab(job.price_period);
         renderInstitution(job.institution_data, job.markets);
         renderPrices(job.price_data, job.markets);
         renderMarginShort(job.margin_short_data, job.markets);
@@ -679,6 +713,9 @@
       runStocks(parseStockCodes(stockCodeInput.value), "輸入");
     });
     runListButton.addEventListener("click", () => runStocks([...stockList], "清單"));
+    pricePeriodButtons.forEach(button => {
+      button.addEventListener("click", () => setPricePeriod(button.dataset.pricePeriod));
+    });
 
     analyzeButton.addEventListener("click", async () => {
       if (!resultData) return;
@@ -720,7 +757,7 @@
       if (resultData) downloadJson(`stock_${timestampString()}.txt`, resultData.institution_data);
     });
     downloadPrices.addEventListener("click", () => {
-      if (resultData) downloadJson(`stock_price_30d_${timestampString()}.txt`, resultData.price_data);
+      if (resultData) downloadJson(`stock_price_${resultData.price_period}_${timestampString()}.txt`, resultData.price_data);
     });
     downloadMarginShort.addEventListener("click", () => {
       if (resultData) downloadJson(`stock_margin_short_${timestampString()}.txt`, resultData.margin_short_data);
