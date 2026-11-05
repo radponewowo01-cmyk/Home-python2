@@ -19,6 +19,7 @@ jobs = OrderedDict()
 jobs_lock = threading.Lock()
 MAX_STOCKS = 100
 MAX_SAVED_JOBS = 5
+STOCK_CODE_PATTERN = re.compile(r"(?:\d{1,6}|\d{5}[A-Z])")
 MARKET_STOCK_CACHE_SECONDS = 6 * 60 * 60
 YAHOO_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
 YAHOO_SEARCH_HEADERS = {
@@ -363,8 +364,8 @@ def validate_stock_list(raw_stocks, allow_empty=False):
 
     stock_list = []
     for value in raw_stocks:
-        stock = str(value).strip()
-        if not re.fullmatch(r"\d{1,6}", stock):
+        stock = str(value).strip().upper()
+        if not STOCK_CODE_PATTERN.fullmatch(stock):
             return None, f"股票代號格式錯誤：{stock or '(空白)'}"
         if stock not in stock_list:
             stock_list.append(stock)
@@ -388,7 +389,7 @@ def fetch_market_source(market, source):
             (str(item[key]).strip() for key in name_keys if item.get(key)),
             "",
         )
-        if re.fullmatch(r"\d{1,6}", code) and name:
+        if STOCK_CODE_PATTERN.fullmatch(code) and name:
             stocks.append({"code": code, "name": name, "market": market})
     if not stocks:
         raise ValueError(f"無法讀取{market}官方股票名單。")
@@ -461,10 +462,10 @@ def search_yahoo_stocks(query):
     stocks = []
     seen_symbols = set()
     for item in quotes:
-        if not isinstance(item, dict) or item.get("quoteType") != "EQUITY":
+        if not isinstance(item, dict) or item.get("quoteType") not in {"EQUITY", "ETF"}:
             continue
         symbol = str(item.get("symbol", "")).upper()
-        match = re.fullmatch(r"(\d{1,6})\.(TW|TWO)", symbol)
+        match = re.fullmatch(r"(\d{1,6}|\d{5}[A-Z])\.(TW|TWO)", symbol)
         if not match or symbol in seen_symbols:
             continue
         seen_symbols.add(symbol)

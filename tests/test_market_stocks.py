@@ -198,7 +198,7 @@ class MarketStockTests(unittest.TestCase):
             any("SELECT stock_code" in statement for statement, _ in cursor.statements)
         )
 
-    def test_search_yahoo_stocks_keeps_taiwan_equities(self):
+    def test_search_yahoo_stocks_keeps_taiwan_equities_and_etfs(self):
         response = mock.Mock()
         response.json.return_value = {
             "quotes": [
@@ -222,6 +222,11 @@ class MarketStockTests(unittest.TestCase):
                     "quoteType": "ETF",
                     "shortname": "Taiwan ETF",
                 },
+                {
+                    "symbol": "00981A.TW",
+                    "quoteType": "ETF",
+                    "shortname": "統一台灣動能",
+                },
             ],
         }
         with mock.patch.object(stock_app.requests, "get", return_value=response) as get:
@@ -232,6 +237,8 @@ class MarketStockTests(unittest.TestCase):
             [
                 {"code": "2330", "name": "台積電", "market": "上市", "symbol": "2330.TW"},
                 {"code": "6488", "name": "環球晶", "market": "上櫃／興櫃", "symbol": "6488.TWO"},
+                {"code": "00927", "name": "Taiwan ETF", "market": "上市", "symbol": "00927.TW"},
+                {"code": "00981A", "name": "統一台灣動能", "market": "上市", "symbol": "00981A.TW"},
             ],
         )
         self.assertEqual(get.call_count, 2)
@@ -239,6 +246,12 @@ class MarketStockTests(unittest.TestCase):
             {call.kwargs["params"]["q"] for call in get.call_args_list},
             {"2330.TW", "2330.TWO"},
         )
+
+    def test_validate_stock_list_accepts_taiwan_etf_code(self):
+        stocks, error = stock_app.validate_stock_list(["00981a"])
+
+        self.assertEqual(stocks, ["00981A"])
+        self.assertIsNone(error)
 
     def test_market_search_uses_yahoo_finance(self):
         official_stocks = [
